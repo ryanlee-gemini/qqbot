@@ -230,8 +230,17 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                   timeoutId = null;
                 }
 
-                const replyText = payload.text ?? "";
+                let replyText = payload.text ?? "";
                 if (!replyText.trim()) return;
+
+                // 处理回复内容，避免被 QQ 识别为 URL
+                // 把文件扩展名中的点替换为下划线，如 README.md -> README_md
+                const originalText = replyText;
+                replyText = replyText.replace(/(\w+)\.(\w{2,4})\b/g, "$1_$2");
+                const hasReplacement = replyText !== originalText;
+                if (hasReplacement) {
+                  replyText += "\n\n（由于平台限制，回复中的部分符号已被替换）";
+                }
 
                 try {
                   if (event.type === "c2c") {
