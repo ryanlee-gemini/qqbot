@@ -13,6 +13,8 @@ const INTENTS = {
 // 重连配置
 const RECONNECT_DELAYS = [1000, 2000, 5000, 10000, 30000, 60000]; // 递增延迟
 const MAX_RECONNECT_ATTEMPTS = 100;
+const MAX_QUICK_DISCONNECT_COUNT = 3; // 连续快速断开次数阈值
+const QUICK_DISCONNECT_THRESHOLD = 5000; // 5秒内断开视为快速断开
 
 export interface GatewayContext {
   account: ResolvedQQBotAccount;
@@ -43,6 +45,8 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
   let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   let sessionId: string | null = null;
   let lastSeq: number | null = null;
+  let lastConnectTime: number = 0; // 上次连接成功的时间
+  let quickDisconnectCount = 0; // 连续快速断开次数
 
   abortSignal.addEventListener("abort", () => {
     isAborted = true;
@@ -109,8 +113,12 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         channelId?: string;
         guildId?: string;
         groupOpenid?: string;
+        attachments?: Array<{ content_type: string; url: string; filename?: string }>;
       }) => {
         log?.info(`[qqbot:${account.accountId}] Processing message from ${event.senderId}: ${event.content}`);
+        if (event.attachments?.length) {
+          log?.info(`[qqbot:${account.accountId}] Attachments: ${event.attachments.length}`);
+        }
 
         pluginRuntime.channel.activity.record({
           channel: "qqbot",
@@ -141,7 +149,23 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         if (account.systemPrompt) {
           systemPrompts.push(account.systemPrompt);
         }
-        const messageBody = `【系统提示】\n${systemPrompts.join("\n")}\n\n【用户输入】\n${event.content}`;
+        
+        // 处理附件（图片等）
+        let attachmentInfo = "";
+        const imageUrls: string[] = [];
+        if (event.attachments?.length) {
+          for (const att of event.attachments) {
+            if (att.content_type?.startsWith("image/")) {
+              imageUrls.push(att.url);
+              attachmentInfo += `\n[图片: ${att.url}]`;
+            } else {
+              attachmentInfo += `\n[附件: ${att.filename ?? att.content_type}]`;
+            }
+          }
+        }
+        
+        const userContent = event.content + attachmentInfo;
+        const messageBody = `【系统提示】\n${systemPrompts.join("\n")}\n\n【用户输入】\n${userContent}`;
 
         const body = pluginRuntime.channel.reply.formatInboundEnvelope({
           channel: "QQBot",
@@ -154,6 +178,8 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
             name: event.senderName,
           },
           envelope: envelopeOptions,
+          // 传递图片 URL 列表
+          ...(imageUrls.length > 0 ? { imageUrls } : {}),
         });
 
         const fromAddress = event.type === "guild" ? `qqbot:channel:${event.channelId}`
@@ -183,17 +209,37 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           QQGroupOpenid: event.groupOpenid,
         });
 
+        // 发送消息的辅助函数，带 token 过期重试
+        const sendWithTokenRetry = async (sendFn: (token: string) => Promise<unknown>) => {
+          try {
+            const token = await getAccessToken(account.appId, account.clientSecret);
+            await sendFn(token);
+          } catch (err) {
+            const errMsg = String(err);
+            // 如果是 token 相关错误，清除缓存重试一次
+            if (errMsg.includes("401") || errMsg.includes("token") || errMsg.includes("access_token")) {
+              log?.info(`[qqbot:${account.accountId}] Token may be expired, refreshing...`);
+              clearTokenCache();
+              const newToken = await getAccessToken(account.appId, account.clientSecret);
+              await sendFn(newToken);
+            } else {
+              throw err;
+            }
+          }
+        };
+
         // 发送错误提示的辅助函数
         const sendErrorMessage = async (errorText: string) => {
           try {
-            const token = await getAccessToken(account.appId, account.clientSecret);
-            if (event.type === "c2c") {
-              await sendC2CMessage(token, event.senderId, errorText, event.messageId);
-            } else if (event.type === "group" && event.groupOpenid) {
-              await sendGroupMessage(token, event.groupOpenid, errorText, event.messageId);
-            } else if (event.channelId) {
-              await sendChannelMessage(token, event.channelId, errorText, event.messageId);
-            }
+            await sendWithTokenRetry(async (token) => {
+              if (event.type === "c2c") {
+                await sendC2CMessage(token, event.senderId, errorText, event.messageId);
+              } else if (event.type === "group" && event.groupOpenid) {
+                await sendGroupMessage(token, event.groupOpenid, errorText, event.messageId);
+              } else if (event.channelId) {
+                await sendChannelMessage(token, event.channelId, errorText, event.messageId);
+              }
+            });
           } catch (sendErr) {
             log?.error(`[qqbot:${account.accountId}] Failed to send error message: ${sendErr}`);
           }
@@ -201,9 +247,6 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 
         try {
           const messagesConfig = pluginRuntime.channel.reply.resolveEffectiveMessagesConfig(cfg, route.agentId);
-
-          // 每次发消息前刷新 token
-          const freshToken = await getAccessToken(account.appId, account.clientSecret);
 
           // 追踪是否有响应
           let hasResponse = false;
@@ -234,22 +277,27 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                 if (!replyText.trim()) return;
 
                 // 处理回复内容，避免被 QQ 识别为 URL
-                // 把文件扩展名中的点替换为下划线，如 README.md -> README_md
                 const originalText = replyText;
-                replyText = replyText.replace(/(\w+)\.(\w{2,4})\b/g, "$1_$2");
+                
+                // 把所有可能被识别为 URL 的点替换为下划线
+                // 匹配：字母/数字.字母/数字 的模式
+                replyText = replyText.replace(/([a-zA-Z0-9])\.([a-zA-Z0-9])/g, "$1_$2");
+                
                 const hasReplacement = replyText !== originalText;
                 if (hasReplacement) {
                   replyText += "\n\n（由于平台限制，回复中的部分符号已被替换）";
                 }
 
                 try {
-                  if (event.type === "c2c") {
-                    await sendC2CMessage(freshToken, event.senderId, replyText, event.messageId);
-                  } else if (event.type === "group" && event.groupOpenid) {
-                    await sendGroupMessage(freshToken, event.groupOpenid, replyText, event.messageId);
-                  } else if (event.channelId) {
-                    await sendChannelMessage(freshToken, event.channelId, replyText, event.messageId);
-                  }
+                  await sendWithTokenRetry(async (token) => {
+                    if (event.type === "c2c") {
+                      await sendC2CMessage(token, event.senderId, replyText, event.messageId);
+                    } else if (event.type === "group" && event.groupOpenid) {
+                      await sendGroupMessage(token, event.groupOpenid, replyText, event.messageId);
+                    } else if (event.channelId) {
+                      await sendChannelMessage(token, event.channelId, replyText, event.messageId);
+                    }
+                  });
                   log?.info(`[qqbot:${account.accountId}] Sent reply`);
 
                   pluginRuntime.channel.activity.record({
@@ -301,6 +349,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
       ws.on("open", () => {
         log?.info(`[qqbot:${account.accountId}] WebSocket connected`);
         reconnectAttempts = 0; // 连接成功，重置重试计数
+        lastConnectTime = Date.now(); // 记录连接时间
       });
 
       ws.on("message", async (data) => {
@@ -366,6 +415,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                   content: event.content,
                   messageId: event.id,
                   timestamp: event.timestamp,
+                  attachments: event.attachments,
                 });
               } else if (t === "AT_MESSAGE_CREATE") {
                 const event = d as GuildMessageEvent;
@@ -378,6 +428,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                   timestamp: event.timestamp,
                   channelId: event.channel_id,
                   guildId: event.guild_id,
+                  attachments: event.attachments,
                 });
               } else if (t === "DIRECT_MESSAGE_CREATE") {
                 const event = d as GuildMessageEvent;
@@ -389,6 +440,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                   messageId: event.id,
                   timestamp: event.timestamp,
                   guildId: event.guild_id,
+                  attachments: event.attachments,
                 });
               } else if (t === "GROUP_AT_MESSAGE_CREATE") {
                 const event = d as GroupMessageEvent;
@@ -399,6 +451,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                   messageId: event.id,
                   timestamp: event.timestamp,
                   groupOpenid: event.group_openid,
+                  attachments: event.attachments,
                 });
               }
               break;
@@ -431,6 +484,25 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 
       ws.on("close", (code, reason) => {
         log?.info(`[qqbot:${account.accountId}] WebSocket closed: ${code} ${reason.toString()}`);
+        
+        // 检测是否是快速断开（连接后很快就断了）
+        const connectionDuration = Date.now() - lastConnectTime;
+        if (connectionDuration < QUICK_DISCONNECT_THRESHOLD && lastConnectTime > 0) {
+          quickDisconnectCount++;
+          log?.info(`[qqbot:${account.accountId}] Quick disconnect detected (${connectionDuration}ms), count: ${quickDisconnectCount}`);
+          
+          // 如果连续快速断开超过阈值，清除 session 重新 identify
+          if (quickDisconnectCount >= MAX_QUICK_DISCONNECT_COUNT) {
+            log?.info(`[qqbot:${account.accountId}] Too many quick disconnects, clearing session to re-identify`);
+            sessionId = null;
+            lastSeq = null;
+            quickDisconnectCount = 0;
+          }
+        } else {
+          // 连接持续时间够长，重置计数
+          quickDisconnectCount = 0;
+        }
+        
         cleanup();
         
         // 非正常关闭则重连

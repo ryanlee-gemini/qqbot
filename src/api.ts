@@ -160,3 +160,31 @@ export async function sendGroupMessage(
     ...(msgId ? { msg_id: msgId } : {}),
   });
 }
+
+/**
+ * 主动发送 C2C 单聊消息（不需要 msg_id，每月限 4 条/用户）
+ */
+export async function sendProactiveC2CMessage(
+  accessToken: string,
+  openid: string,
+  content: string
+): Promise<{ id: string; timestamp: number }> {
+  return apiRequest(accessToken, "POST", `/v2/users/${openid}/messages`, {
+    content,
+    msg_type: 0,
+  });
+}
+
+/**
+ * 主动发送群聊消息（不需要 msg_id，每月限 4 条/群）
+ */
+export async function sendProactiveGroupMessage(
+  accessToken: string,
+  groupOpenid: string,
+  content: string
+): Promise<{ id: string; timestamp: string }> {
+  return apiRequest(accessToken, "POST", `/v2/groups/${groupOpenid}/messages`, {
+    content,
+    msg_type: 0,
+  });
+}

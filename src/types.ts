@@ -38,6 +38,18 @@ export interface QQBotAccountConfig {
 }
 
 /**
+ * 富媒体附件
+ */
+export interface MessageAttachment {
+  content_type: string;  // 如 "image/png"
+  filename?: string;
+  height?: number;
+  width?: number;
+  size?: number;
+  url: string;
+}
+
+/**
  * C2C 消息事件
  */
 export interface C2CMessageEvent {
@@ -52,6 +64,7 @@ export interface C2CMessageEvent {
   message_scene?: {
     source: string;
   };
+  attachments?: MessageAttachment[];
 }
 
 /**
@@ -72,6 +85,7 @@ export interface GuildMessageEvent {
     nick?: string;
     joined_at?: string;
   };
+  attachments?: MessageAttachment[];
 }
 
 /**
@@ -87,6 +101,7 @@ export interface GroupMessageEvent {
   timestamp: string;
   group_id: string;
   group_openid: string;
+  attachments?: MessageAttachment[];
 }
 
 /**
