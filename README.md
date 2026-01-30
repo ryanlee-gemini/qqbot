@@ -19,6 +19,7 @@ QQ 官方机器人 API 的 Moltbot 渠道插件，支持 C2C 私聊、群聊 @�
 ### 1.3.0（即将更新）
 - 支持更加丰富的富文本消息
 - 修复[health]检查提示: [health] refresh failed: Cannot read properties of undefined (reading 'appId')的问题（不影响使用）
+- 修复文件发送后clawdbot无法读取的问题
 
 ### 1.2.1
 - 解决了长时间使用会断联的问题
