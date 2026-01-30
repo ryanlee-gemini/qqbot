@@ -65,21 +65,22 @@ export interface GatewayContext {
 /**
  * 启动图床服务器
  */
-async function ensureImageServer(log?: GatewayContext["log"]): Promise<string | null> {
+async function ensureImageServer(log?: GatewayContext["log"], publicBaseUrl?: string): Promise<string | null> {
   if (isImageServerRunning()) {
-    return `http://0.0.0.0:${IMAGE_SERVER_PORT}`;
+    return publicBaseUrl || `http://0.0.0.0:${IMAGE_SERVER_PORT}`;
   }
 
   try {
     const config: Partial<ImageServerConfig> = {
       port: IMAGE_SERVER_PORT,
       storageDir: IMAGE_SERVER_DIR,
-      baseUrl: `http://0.0.0.0:${IMAGE_SERVER_PORT}`,
+      // 使用用户配置的公网地址，而不是 0.0.0.0
+      baseUrl: publicBaseUrl || `http://0.0.0.0:${IMAGE_SERVER_PORT}`,
       ttlSeconds: 3600, // 1 小时过期
     };
     await startImageServer(config);
-    log?.info(`[qqbot] Image server started on port ${IMAGE_SERVER_PORT}`);
-    return `http://0.0.0.0:${IMAGE_SERVER_PORT}`;
+    log?.info(`[qqbot] Image server started on port ${IMAGE_SERVER_PORT}, baseUrl: ${config.baseUrl}`);
+    return config.baseUrl!;
   } catch (err) {
     log?.error(`[qqbot] Failed to start image server: ${err}`);
     return null;
@@ -99,7 +100,8 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
   // 如果配置了公网 URL，启动图床服务器
   let imageServerBaseUrl: string | null = null;
   if (account.imageServerBaseUrl) {
-    await ensureImageServer(log);
+    // 使用用户配置的公网地址作为 baseUrl
+    await ensureImageServer(log, account.imageServerBaseUrl);
     imageServerBaseUrl = account.imageServerBaseUrl;
     log?.info(`[qqbot:${account.accountId}] Image server enabled with URL: ${imageServerBaseUrl}`);
   } else {
@@ -454,6 +456,32 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
                     }
                   }
                   // 从文本中移除 MEDIA: 行
+                  replyText = replyText.replace(match[0], "").trim();
+                }
+                
+                // 0.5. 提取本地绝对文件路径（/path/to/image.png 或 /path/to/image_123_png 格式）
+                // 支持标准扩展名和下划线替换后的扩展名
+                const localPathRegex = /(\/[^\s\n]+?(?:\.(?:png|jpg|jpeg|gif|webp)|_(?:png|jpg|jpeg|gif|webp)(?:\s|$)))/gi;
+                const localPathMatches = [...replyText.matchAll(localPathRegex)];
+                
+                for (const match of localPathMatches) {
+                  let localPath = match[1].trim();
+                  if (localPath && imageServerBaseUrl) {
+                    // 如果是下划线格式的扩展名，转换回点格式
+                    localPath = localPath.replace(/_(?=(?:png|jpg|jpeg|gif|webp)$)/, ".");
+                    try {
+                      const savedUrl = saveImageFromPath(localPath);
+                      if (savedUrl) {
+                        imageUrls.push(savedUrl);
+                        log?.info(`[qqbot:${account.accountId}] Saved local path image to server: ${localPath}`);
+                      } else {
+                        log?.error(`[qqbot:${account.accountId}] Local path not found or not image: ${localPath}`);
+                      }
+                    } catch (err) {
+                      log?.error(`[qqbot:${account.accountId}] Failed to save local path image: ${err}`);
+                    }
+                  }
+                  // 从文本中移除本地路径
                   replyText = replyText.replace(match[0], "").trim();
                 }
                 
