@@ -1,17 +1,14 @@
 {
-  "name": "qqbot",
-  "version": "1.2.3",
+  "name": "@openclaw/qqbot",
+  "version": "2026.1.31",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
-  "clawdbot": {
-    "extensions": ["./index.ts"]
-  },
-  "moltbot": {
-    "extensions": ["./index.ts"]
-  },
+  "description": "OpenClaw QQ Bot channel plugin with streaming message support",
   "openclaw": {
-    "extensions": ["./index.ts"]
+    "extensions": [
+      "./index.ts"
+    ]
   },
   "scripts": {
     "build": "tsc || true",
@@ -27,11 +24,9 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/ws": "^8.5.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.9.3"
   },
   "peerDependencies": {
-    "clawdbot": "*",
-    "moltbot": "*",
     "openclaw": "*"
   }
 }

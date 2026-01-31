@@ -1,27 +1,73 @@
-import type { ChannelPlugin } from "clawdbot/plugin-sdk";
+import {
+  type ChannelPlugin,
+  type OpenClawConfig,
+  applyAccountNameToChannelSection,
+  deleteAccountFromConfigSection,
+  setAccountEnabledInConfigSection,
+} from "openclaw/plugin-sdk";
+
 import type { ResolvedQQBotAccount } from "./types.js";
-import { listQQBotAccountIds, resolveQQBotAccount, applyQQBotAccountConfig } from "./config.js";
-import { sendText } from "./outbound.js";
+import { DEFAULT_ACCOUNT_ID, listQQBotAccountIds, resolveQQBotAccount, applyQQBotAccountConfig, resolveDefaultQQBotAccountId } from "./config.js";
+import { sendText, sendMedia, createStreamSender, sendTextStream, StreamSender } from "./outbound.js";
 import { startGateway } from "./gateway.js";
 import { qqbotOnboardingAdapter } from "./onboarding.js";
+import { getQQBotRuntime } from "./runtime.js";
 
-const DEFAULT_ACCOUNT_ID = "default";
+/**
+ * 简单的文本分块函数
+ * QQ Bot 使用流式消息时，不需要预先分块，而是在发送时逐步累积
+ * 但框架可能调用此函数来预分块长文本
+ */
+function chunkText(text: string, limit: number): string[] {
+  if (text.length <= limit) return [text];
+  
+  const chunks: string[] = [];
+  let remaining = text;
+  
+  while (remaining.length > 0) {
+    if (remaining.length <= limit) {
+      chunks.push(remaining);
+      break;
+    }
+    
+    // 尝试在换行处分割
+    let splitAt = remaining.lastIndexOf("\n", limit);
+    if (splitAt <= 0 || splitAt < limit * 0.5) {
+      // 没找到合适的换行，尝试在空格处分割
+      splitAt = remaining.lastIndexOf(" ", limit);
+    }
+    if (splitAt <= 0 || splitAt < limit * 0.5) {
+      // 还是没找到，强制在 limit 处分割
+      splitAt = limit;
+    }
+    
+    chunks.push(remaining.slice(0, splitAt));
+    remaining = remaining.slice(splitAt).trimStart();
+  }
+  
+  return chunks;
+}
 
 export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   id: "qqbot",
   meta: {
     id: "qqbot",
-    label: "QQ Bot",
-    selectionLabel: "QQ Bot",
+    label: "QQ Bot (Stream)",
+    selectionLabel: "QQ Bot (Stream)",
     docsPath: "/docs/channels/qqbot",
-    blurb: "Connect to QQ via official QQ Bot API",
+    blurb: "Connect to QQ via official QQ Bot API with streaming message support",
     order: 50,
   },
   capabilities: {
     chatTypes: ["direct", "group"],
-    media: false,
+    media: true,
     reactions: false,
     threads: false,
+    /**
+     * blockStreaming: true 表示该 Channel 支持块流式
+     * 框架会收集流式响应，然后通过 deliver 回调发送
+     */
+    blockStreaming: true,
   },
   reload: { configPrefixes: ["channels.qqbot"] },
   // CLI onboarding wizard
@@ -29,7 +75,24 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   config: {
     listAccountIds: (cfg) => listQQBotAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveQQBotAccount(cfg, accountId),
-    defaultAccountId: () => DEFAULT_ACCOUNT_ID,
+    defaultAccountId: (cfg) => resolveDefaultQQBotAccountId(cfg),
+    // 新增：设置账户启用状态
+    setAccountEnabled: ({ cfg, accountId, enabled }) =>
+      setAccountEnabledInConfigSection({
+        cfg,
+        sectionKey: "qqbot",
+        accountId,
+        enabled,
+        allowTopLevel: true,
+      }),
+    // 新增：删除账户
+    deleteAccount: ({ cfg, accountId }) =>
+      deleteAccountFromConfigSection({
+        cfg,
+        sectionKey: "qqbot",
+        accountId,
+        clearBaseFields: ["appId", "clientSecret", "clientSecretFile", "name"],
+      }),
     isConfigured: (account) => Boolean(account?.appId && account?.clientSecret),
     describeAccount: (account) => ({
       accountId: account?.accountId ?? DEFAULT_ACCOUNT_ID,
@@ -40,6 +103,16 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     }),
   },
   setup: {
+    // 新增：规范化账户 ID
+    resolveAccountId: ({ accountId }) => accountId?.trim().toLowerCase() || DEFAULT_ACCOUNT_ID,
+    // 新增：应用账户名称
+    applyAccountName: ({ cfg, accountId, name }) =>
+      applyAccountNameToChannelSection({
+        cfg,
+        channelKey: "qqbot",
+        accountId,
+        name,
+      }),
     validateInput: ({ input }) => {
       if (!input.token && !input.tokenFile && !input.useEnv) {
         return "QQBot requires --token (format: appId:clientSecret) or --use-env";
@@ -67,12 +140,35 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       });
     },
   },
+  // 新增：消息目标解析
+  messaging: {
+    normalizeTarget: (target) => {
+      // 支持格式: qqbot:openid, qqbot:group:xxx, openid, group:xxx
+      const normalized = target.replace(/^qqbot:/i, "");
+      return { ok: true, to: normalized };
+    },
+    targetResolver: {
+      looksLikeId: (id) => /^[A-F0-9]{32}$/i.test(id) || id.startsWith("group:") || id.startsWith("channel:"),
+      hint: "<openid> or group:<groupOpenid>",
+    },
+  },
   outbound: {
     deliveryMode: "direct",
+    chunker: chunkText,
+    chunkerMode: "markdown",
     textChunkLimit: 2000,
     sendText: async ({ to, text, accountId, replyToId, cfg }) => {
       const account = resolveQQBotAccount(cfg, accountId);
       const result = await sendText({ to, text, accountId, replyToId, account });
+      return {
+        channel: "qqbot",
+        messageId: result.messageId,
+        error: result.error ? new Error(result.error) : undefined,
+      };
+    },
+    sendMedia: async ({ to, text, mediaUrl, accountId, replyToId, cfg }) => {
+      const account = resolveQQBotAccount(cfg, accountId);
+      const result = await sendMedia({ to, text, mediaUrl, accountId, replyToId, account });
       return {
         channel: "qqbot",
         messageId: result.messageId,
@@ -84,7 +180,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     startAccount: async (ctx) => {
       const { account, abortSignal, log, cfg } = ctx;
 
-      log?.info(`[qqbot:${account.accountId}] Starting gateway`);
+      log?.info(`[qqbot:${account.accountId}] Starting gateway (stream-enabled)`);
 
       await startGateway({
         account,
@@ -109,6 +205,46 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         },
       });
     },
+    // 新增：登出账户（清除配置中的凭证）
+    logoutAccount: async ({ accountId, cfg }) => {
+      const nextCfg = { ...cfg } as OpenClawConfig;
+      const nextQQBot = cfg.channels?.qqbot ? { ...cfg.channels.qqbot } : undefined;
+      let cleared = false;
+      let changed = false;
+
+      if (nextQQBot) {
+        const qqbot = nextQQBot as Record<string, unknown>;
+        if (accountId === DEFAULT_ACCOUNT_ID && qqbot.clientSecret) {
+          delete qqbot.clientSecret;
+          cleared = true;
+          changed = true;
+        }
+        const accounts = qqbot.accounts as Record<string, Record<string, unknown>> | undefined;
+        if (accounts && accountId in accounts) {
+          const entry = accounts[accountId];
+          if (entry && "clientSecret" in entry) {
+            delete entry.clientSecret;
+            cleared = true;
+            changed = true;
+          }
+          if (Object.keys(entry).length === 0) {
+            delete accounts[accountId];
+            changed = true;
+          }
+        }
+      }
+
+      if (changed && nextQQBot) {
+        nextCfg.channels = { ...nextCfg.channels, qqbot: nextQQBot };
+        await getQQBotRuntime().config.writeConfigFile(nextCfg);
+      }
+
+      const resolved = resolveQQBotAccount(changed ? nextCfg : cfg, accountId);
+      const loggedOut = resolved.secretSource === "none";
+      const envToken = Boolean(process.env.QQBOT_CLIENT_SECRET);
+
+      return { cleared, envToken, loggedOut };
+    },
   },
   status: {
     defaultRuntime: {
@@ -117,7 +253,18 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       connected: false,
       lastConnectedAt: null,
       lastError: null,
+      lastInboundAt: null,
+      lastOutboundAt: null,
     },
+    // 新增：构建通道摘要
+    buildChannelSummary: ({ snapshot }) => ({
+      configured: snapshot.configured ?? false,
+      tokenSource: snapshot.tokenSource ?? "none",
+      running: snapshot.running ?? false,
+      connected: snapshot.connected ?? false,
+      lastConnectedAt: snapshot.lastConnectedAt ?? null,
+      lastError: snapshot.lastError ?? null,
+    }),
     buildAccountSnapshot: ({ account, runtime }) => ({
       accountId: account?.accountId ?? DEFAULT_ACCOUNT_ID,
       name: account?.name,
@@ -128,6 +275,41 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       connected: runtime?.connected ?? false,
       lastConnectedAt: runtime?.lastConnectedAt ?? null,
       lastError: runtime?.lastError ?? null,
+      lastInboundAt: runtime?.lastInboundAt ?? null,
+      lastOutboundAt: runtime?.lastOutboundAt ?? null,
     }),
   },
 };
+
+/**
+ * 导出流式消息工具函数，供外部使用
+ * 
+ * 使用示例：
+ * ```typescript
+ * import { createStreamSender } from "qqbot";
+ * 
+ * // 创建流式发送器
+ * const sender = createStreamSender(account, "group:xxx", replyMsgId);
+ * 
+ * // 发送第一个分片 (state=1, index=0, id="")
+ * await sender.send("Hello, ", false);
+ * 
+ * // 发送中间分片 (state=1, index=1, id=从上次响应获取)
+ * await sender.send("Hello, this is ", false);
+ * 
+ * // 发送最后分片并结束 (state=10, index=2)
+ * await sender.end("Hello, this is a streaming message!");
+ * ```
+ * 
+ * 或使用 AsyncGenerator：
+ * ```typescript
+ * async function* generateText() {
+ *   yield "Hello, ";
+ *   yield "this is ";
+ *   yield "a streaming message!";
+ * }
+ * 
+ * await sendTextStream(ctx, generateText());
+ * ```
+ */
+export { createStreamSender, sendTextStream, StreamSender };

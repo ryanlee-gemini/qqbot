@@ -1,9 +1,29 @@
 /**
- * QQ Bot API 鉴权和请求封装
+ * QQ Bot API 鉴权和请求封装（支持流式消息）
  */
+
+import { StreamState, type StreamConfig } from "./types.js";
 
 const API_BASE = "https://api.sgroup.qq.com";
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
+
+// 运行时配置
+let currentMarkdownSupport = false;
+
+/**
+ * 初始化 API 配置
+ * @param options.markdownSupport - 是否支持 markdown 消息
+ */
+export function initApiConfig(options: { markdownSupport?: boolean }): void {
+  currentMarkdownSupport = options.markdownSupport === true; // 默认为 false
+}
+
+/**
+ * 获取当前是否支持 markdown
+ */
+export function isMarkdownSupport(): boolean {
+  return currentMarkdownSupport;
+}
 
 let cachedToken: { token: string; expiresAt: number } | null = null;
 
@@ -16,21 +36,44 @@ export async function getAccessToken(appId: string, clientSecret: string): Promi
     return cachedToken.token;
   }
 
+  const requestBody = { appId, clientSecret };
+  const requestHeaders = { "Content-Type": "application/json" };
+  
+  // 打印请求信息（隐藏敏感信息）
+  console.log(`[qqbot-api] >>> POST ${TOKEN_URL}`);
+  console.log(`[qqbot-api] >>> Headers:`, JSON.stringify(requestHeaders, null, 2));
+  console.log(`[qqbot-api] >>> Body:`, JSON.stringify({ appId, clientSecret: "***" }, null, 2));
+
   let response: Response;
   try {
     response = await fetch(TOKEN_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ appId, clientSecret }),
+      headers: requestHeaders,
+      body: JSON.stringify(requestBody),
     });
   } catch (err) {
+    console.error(`[qqbot-api] <<< Network error:`, err);
     throw new Error(`Network error getting access_token: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // 打印响应头
+  const responseHeaders: Record<string, string> = {};
+  response.headers.forEach((value, key) => {
+    responseHeaders[key] = value;
+  });
+  console.log(`[qqbot-api] <<< Status: ${response.status} ${response.statusText}`);
+  console.log(`[qqbot-api] <<< Headers:`, JSON.stringify(responseHeaders, null, 2));
+
   let data: { access_token?: string; expires_in?: number };
+  let rawBody: string;
   try {
-    data = (await response.json()) as { access_token?: string; expires_in?: number };
+    rawBody = await response.text();
+    // 隐藏 token 值
+    const logBody = rawBody.replace(/"access_token"\s*:\s*"[^"]+"/g, '"access_token": "***"');
+    console.log(`[qqbot-api] <<< Body:`, logBody);
+    data = JSON.parse(rawBody) as { access_token?: string; expires_in?: number };
   } catch (err) {
+    console.error(`[qqbot-api] <<< Parse error:`, err);
     throw new Error(`Failed to parse access_token response: ${err instanceof Error ? err.message : String(err)}`);
   }
 
@@ -93,29 +136,50 @@ export async function apiRequest<T = unknown>(
   body?: unknown
 ): Promise<T> {
   const url = `${API_BASE}${path}`;
+  const headers: Record<string, string> = {
+    Authorization: `QQBot ${accessToken}`,
+    "Content-Type": "application/json",
+  };
   const options: RequestInit = {
     method,
-    headers: {
-      Authorization: `QQBot ${accessToken}`,
-      "Content-Type": "application/json",
-    },
+    headers,
   };
 
   if (body) {
     options.body = JSON.stringify(body);
   }
 
+  // 打印请求信息
+  console.log(`[qqbot-api] >>> ${method} ${url}`);
+  console.log(`[qqbot-api] >>> Headers:`, JSON.stringify(headers, null, 2));
+  if (body) {
+    console.log(`[qqbot-api] >>> Body:`, JSON.stringify(body, null, 2));
+  }
+
   let res: Response;
   try {
     res = await fetch(url, options);
   } catch (err) {
+    console.error(`[qqbot-api] <<< Network error:`, err);
     throw new Error(`Network error [${path}]: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // 打印响应头
+  const responseHeaders: Record<string, string> = {};
+  res.headers.forEach((value, key) => {
+    responseHeaders[key] = value;
+  });
+  console.log(`[qqbot-api] <<< Status: ${res.status} ${res.statusText}`);
+  console.log(`[qqbot-api] <<< Headers:`, JSON.stringify(responseHeaders, null, 2));
+
   let data: T;
+  let rawBody: string;
   try {
-    data = (await res.json()) as T;
+    rawBody = await res.text();
+    console.log(`[qqbot-api] <<< Body:`, rawBody);
+    data = JSON.parse(rawBody) as T;
   } catch (err) {
+    console.error(`[qqbot-api] <<< Parse error:`, err);
     throw new Error(`Failed to parse response [${path}]: ${err instanceof Error ? err.message : String(err)}`);
   }
 
@@ -135,26 +199,98 @@ export async function getGatewayUrl(accessToken: string): Promise<string> {
   return data.url;
 }
 
+// ============ 流式消息发送接口 ============
+
 /**
- * 发送 C2C 单聊消息
+ * 流式消息响应
+ */
+export interface StreamMessageResponse {
+  id: string;
+  timestamp: number | string;
+  /** 流式消息ID，用于后续分片 */
+  stream_id?: string;
+}
+
+/**
+ * 构建流式消息体
+ * 根据 markdownSupport 配置决定消息格式：
+ * - markdown 模式: { markdown: { content }, msg_type: 2 }
+ * - 纯文本模式: { content, msg_type: 0 }
+ */
+function buildStreamBody(
+  content: string,
+  msgId: string | undefined,
+  msgSeq: number,
+  stream?: StreamConfig
+): Record<string, unknown> {
+  const body: Record<string, unknown> = currentMarkdownSupport
+    ? {
+        markdown: { content },
+        msg_type: 2,
+        msg_seq: msgSeq,
+      }
+    : {
+        content,
+        msg_type: 0,
+        msg_seq: msgSeq,
+      };
+
+  if (msgId) {
+    body.msg_id = msgId;
+  }
+
+  if (stream) {
+    body.stream = {
+      state: stream.state,
+      index: stream.index,
+      ...(stream.id ? { id: stream.id } : {}),
+    };
+  }
+
+  return body;
+}
+
+/**
+ * 发送 C2C 单聊消息（支持流式）
  */
 export async function sendC2CMessage(
   accessToken: string,
   openid: string,
   content: string,
-  msgId?: string
-): Promise<{ id: string; timestamp: number }> {
+  msgId?: string,
+  stream?: StreamConfig
+): Promise<StreamMessageResponse> {
   const msgSeq = msgId ? getNextMsgSeq(msgId) : 1;
-  return apiRequest(accessToken, "POST", `/v2/users/${openid}/messages`, {
-    content,
-    msg_type: 0,
-    msg_seq: msgSeq,
-    ...(msgId ? { msg_id: msgId } : {}),
-  });
+  const body = buildStreamBody(content, msgId, msgSeq, stream);
+  
+  return apiRequest(accessToken, "POST", `/v2/users/${openid}/messages`, body);
 }
 
 /**
- * 发送频道消息
+ * 发送 C2C 输入状态提示（告知用户机器人正在输入）
+ */
+export async function sendC2CInputNotify(
+  accessToken: string,
+  openid: string,
+  msgId?: string,
+  inputSecond: number = 60
+): Promise<void> {
+  const msgSeq = msgId ? getNextMsgSeq(msgId) : 1;
+  const body = {
+    msg_type: 6,
+    input_notify: {
+      input_type: 1,
+      input_second: inputSecond,
+    },
+    msg_seq: msgSeq,
+    ...(msgId ? { msg_id: msgId } : {}),
+  };
+  
+  await apiRequest(accessToken, "POST", `/v2/users/${openid}/messages`, body);
+}
+
+/**
+ * 发送频道消息（不支持流式）
  */
 export async function sendChannelMessage(
   accessToken: string,
@@ -169,21 +305,19 @@ export async function sendChannelMessage(
 }
 
 /**
- * 发送群聊消息
+ * 发送群聊消息（支持流式）
  */
 export async function sendGroupMessage(
   accessToken: string,
   groupOpenid: string,
   content: string,
-  msgId?: string
-): Promise<{ id: string; timestamp: string }> {
+  msgId?: string,
+  stream?: StreamConfig
+): Promise<StreamMessageResponse> {
   const msgSeq = msgId ? getNextMsgSeq(msgId) : 1;
-  return apiRequest(accessToken, "POST", `/v2/groups/${groupOpenid}/messages`, {
-    content,
-    msg_type: 0,
-    msg_seq: msgSeq,
-    ...(msgId ? { msg_id: msgId } : {}),
-  });
+  const body = buildStreamBody(content, msgId, msgSeq, stream);
+  
+  return apiRequest(accessToken, "POST", `/v2/groups/${groupOpenid}/messages`, body);
 }
 
 /**
@@ -238,11 +372,6 @@ export interface UploadMediaResponse {
 
 /**
  * 上传富媒体文件到 C2C 单聊
- * @param accessToken 访问令牌
- * @param openid 用户 openid
- * @param fileType 文件类型
- * @param url 媒体资源 URL
- * @param srvSendMsg 是否直接发送（推荐 false，获取 file_info 后再发送）
  */
 export async function uploadC2CMedia(
   accessToken: string,
@@ -260,11 +389,6 @@ export async function uploadC2CMedia(
 
 /**
  * 上传富媒体文件到群聊
- * @param accessToken 访问令牌
- * @param groupOpenid 群 openid
- * @param fileType 文件类型
- * @param url 媒体资源 URL
- * @param srvSendMsg 是否直接发送（推荐 false，获取 file_info 后再发送）
  */
 export async function uploadGroupMedia(
   accessToken: string,
@@ -282,11 +406,6 @@ export async function uploadGroupMedia(
 
 /**
  * 发送 C2C 单聊富媒体消息
- * @param accessToken 访问令牌
- * @param openid 用户 openid
- * @param fileInfo 从 uploadC2CMedia 获取的 file_info
- * @param msgId 被动回复时需要的消息 ID
- * @param content 可选的文字内容
  */
 export async function sendC2CMediaMessage(
   accessToken: string,
@@ -307,11 +426,6 @@ export async function sendC2CMediaMessage(
 
 /**
  * 发送群聊富媒体消息
- * @param accessToken 访问令牌
- * @param groupOpenid 群 openid
- * @param fileInfo 从 uploadGroupMedia 获取的 file_info
- * @param msgId 被动回复时需要的消息 ID
- * @param content 可选的文字内容
  */
 export async function sendGroupMediaMessage(
   accessToken: string,
@@ -332,11 +446,6 @@ export async function sendGroupMediaMessage(
 
 /**
  * 发送带图片的 C2C 单聊消息（封装上传+发送）
- * @param accessToken 访问令牌
- * @param openid 用户 openid
- * @param imageUrl 图片 URL
- * @param msgId 被动回复时需要的消息 ID
- * @param content 可选的文字内容
  */
 export async function sendC2CImageMessage(
   accessToken: string,
@@ -353,11 +462,6 @@ export async function sendC2CImageMessage(
 
 /**
  * 发送带图片的群聊消息（封装上传+发送）
- * @param accessToken 访问令牌
- * @param groupOpenid 群 openid
- * @param imageUrl 图片 URL
- * @param msgId 被动回复时需要的消息 ID
- * @param content 可选的文字内容
  */
 export async function sendGroupImageMessage(
   accessToken: string,

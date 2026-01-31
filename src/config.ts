@@ -1,14 +1,7 @@
 import type { ResolvedQQBotAccount, QQBotAccountConfig } from "./types.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk";
 
-const DEFAULT_ACCOUNT_ID = "default";
-
-interface MoltbotConfig {
-  channels?: {
-    qqbot?: QQBotChannelConfig;
-    [key: string]: unknown;
-  };
-  [key: string]: unknown;
-}
+export const DEFAULT_ACCOUNT_ID = "default";
 
 interface QQBotChannelConfig extends QQBotAccountConfig {
   accounts?: Record<string, QQBotAccountConfig>;
@@ -17,9 +10,9 @@ interface QQBotChannelConfig extends QQBotAccountConfig {
 /**
  * 列出所有 QQBot 账户 ID
  */
-export function listQQBotAccountIds(cfg: MoltbotConfig): string[] {
+export function listQQBotAccountIds(cfg: OpenClawConfig): string[] {
   const ids = new Set<string>();
-  const qqbot = cfg.channels?.qqbot;
+  const qqbot = cfg.channels?.qqbot as QQBotChannelConfig | undefined;
 
   if (qqbot?.appId) {
     ids.add(DEFAULT_ACCOUNT_ID);
@@ -37,14 +30,33 @@ export function listQQBotAccountIds(cfg: MoltbotConfig): string[] {
 }
 
 /**
+ * 获取默认账户 ID
+ */
+export function resolveDefaultQQBotAccountId(cfg: OpenClawConfig): string {
+  const qqbot = cfg.channels?.qqbot as QQBotChannelConfig | undefined;
+  // 如果有默认账户配置，返回 default
+  if (qqbot?.appId) {
+    return DEFAULT_ACCOUNT_ID;
+  }
+  // 否则返回第一个配置的账户
+  if (qqbot?.accounts) {
+    const ids = Object.keys(qqbot.accounts);
+    if (ids.length > 0) {
+      return ids[0];
+    }
+  }
+  return DEFAULT_ACCOUNT_ID;
+}
+
+/**
  * 解析 QQBot 账户配置
  */
 export function resolveQQBotAccount(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   accountId?: string | null
 ): ResolvedQQBotAccount {
   const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
-  const qqbot = cfg.channels?.qqbot;
+  const qqbot = cfg.channels?.qqbot as QQBotChannelConfig | undefined;
 
   // 基础配置
   let accountConfig: QQBotAccountConfig = {};
@@ -64,6 +76,7 @@ export function resolveQQBotAccount(
       allowFrom: qqbot?.allowFrom,
       systemPrompt: qqbot?.systemPrompt,
       imageServerBaseUrl: qqbot?.imageServerBaseUrl,
+      markdownSupport: qqbot?.markdownSupport,
     };
     appId = qqbot?.appId ?? "";
   } else {
@@ -99,6 +112,7 @@ export function resolveQQBotAccount(
     secretSource,
     systemPrompt: accountConfig.systemPrompt,
     imageServerBaseUrl: accountConfig.imageServerBaseUrl || process.env.QQBOT_IMAGE_SERVER_BASE_URL,
+    markdownSupport: accountConfig.markdownSupport,
     config: accountConfig,
   };
 }
@@ -107,10 +121,10 @@ export function resolveQQBotAccount(
  * 应用账户配置
  */
 export function applyQQBotAccountConfig(
-  cfg: MoltbotConfig,
+  cfg: OpenClawConfig,
   accountId: string,
   input: { appId?: string; clientSecret?: string; clientSecretFile?: string; name?: string; imageServerBaseUrl?: string }
-): MoltbotConfig {
+): OpenClawConfig {
   const next = { ...cfg };
 
   if (accountId === DEFAULT_ACCOUNT_ID) {

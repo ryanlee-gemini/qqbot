@@ -21,6 +21,8 @@ export interface ResolvedQQBotAccount {
   systemPrompt?: string;
   /** 图床服务器公网地址 */
   imageServerBaseUrl?: string;
+  /** 是否支持 markdown 消息 */
+  markdownSupport?: boolean;
   config: QQBotAccountConfig;
 }
 
@@ -39,6 +41,8 @@ export interface QQBotAccountConfig {
   systemPrompt?: string;
   /** 图床服务器公网地址，用于发送图片，例如 http://your-ip:18765 */
   imageServerBaseUrl?: string;
+  /** 是否支持 markdown 消息，默认 true */
+  markdownSupport?: boolean;
 }
 
 /**
@@ -116,4 +120,38 @@ export interface WSPayload {
   d?: unknown;
   s?: number;
   t?: string;
+}
+
+/**
+ * 流式消息状态
+ */
+export enum StreamState {
+  /** 流式消息开始/进行中 */
+  STREAMING = 1,
+  /** 流式消息结束 */
+  END = 10,
+}
+
+/**
+ * 流式消息配置
+ */
+export interface StreamConfig {
+  /** 流式状态: 1=开始/进行中, 10=结束 */
+  state: StreamState;
+  /** 分片索引，从0开始 */
+  index: number;
+  /** 流式消息ID，第一次发送为空，后续需要带上服务端返回的ID */
+  id: string;
+}
+
+/**
+ * 流式消息发送上下文
+ */
+export interface StreamContext {
+  /** 当前分片索引 */
+  index: number;
+  /** 流式消息ID（首次发送后由服务端返回） */
+  streamId: string;
+  /** 是否已结束 */
+  ended: boolean;
 }

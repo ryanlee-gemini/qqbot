@@ -1,7 +1,7 @@
 /**
  * QQBot CLI Onboarding Adapter
  * 
- * 提供 moltbot onboard 命令的交互式配置支持
+ * 提供 openclaw onboard 命令的交互式配置支持
  */
 import type { 
   ChannelOnboardingAdapter,
@@ -9,20 +9,11 @@ import type {
   ChannelOnboardingStatusContext,
   ChannelOnboardingConfigureContext,
   ChannelOnboardingResult,
-} from "clawdbot/plugin-sdk";
-import { listQQBotAccountIds, resolveQQBotAccount } from "./config.js";
+  OpenClawConfig,
+} from "openclaw/plugin-sdk";
+import { DEFAULT_ACCOUNT_ID, listQQBotAccountIds, resolveQQBotAccount } from "./config.js";
 
-const DEFAULT_ACCOUNT_ID = "default";
-
-// 内部类型（避免循环依赖）
-interface MoltbotConfig {
-  channels?: {
-    qqbot?: QQBotChannelConfig;
-    [key: string]: unknown;
-  };
-  [key: string]: unknown;
-}
-
+// 内部类型（用于类型安全）
 interface QQBotChannelConfig {
   enabled?: boolean;
   appId?: string;
@@ -43,7 +34,7 @@ interface QQBotChannelConfig {
 /**
  * 解析默认账户 ID
  */
-function resolveDefaultQQBotAccountId(cfg: MoltbotConfig): string {
+function resolveDefaultQQBotAccountId(cfg: OpenClawConfig): string {
   const ids = listQQBotAccountIds(cfg);
   return ids[0] ?? DEFAULT_ACCOUNT_ID;
 }
@@ -56,31 +47,30 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
 
   getStatus: async (ctx: ChannelOnboardingStatusContext): Promise<ChannelOnboardingStatus> => {
     const { cfg } = ctx;
-    const configured = listQQBotAccountIds(cfg as MoltbotConfig).some((accountId) => {
-      const account = resolveQQBotAccount(cfg as MoltbotConfig, accountId);
+    const configured = listQQBotAccountIds(cfg).some((accountId) => {
+      const account = resolveQQBotAccount(cfg, accountId);
       return Boolean(account.appId && account.clientSecret);
     });
 
     return {
       channel: "qqbot" as any,
       configured,
-      statusLines: [`QQ Bot: ${configured ? "已配置" : "需要 AppID 和 ClientSecret"}`],
-      selectionHint: configured ? "已配置" : "支持 QQ 群聊和私聊",
+      statusLines: [`QQ Bot (Stream): ${configured ? "已配置" : "需要 AppID 和 ClientSecret"}`],
+      selectionHint: configured ? "已配置" : "支持 QQ 群聊和私聊（流式消息）",
       quickstartScore: configured ? 1 : 20,
     };
   },
 
   configure: async (ctx: ChannelOnboardingConfigureContext): Promise<ChannelOnboardingResult> => {
     const { cfg, prompter, accountOverrides, shouldPromptAccountIds } = ctx;
-    const moltbotCfg = cfg as MoltbotConfig;
     
     const qqbotOverride = (accountOverrides as Record<string, string>).qqbot?.trim();
-    const defaultAccountId = resolveDefaultQQBotAccountId(moltbotCfg);
+    const defaultAccountId = resolveDefaultQQBotAccountId(cfg);
     let accountId = qqbotOverride ?? defaultAccountId;
 
     // 是否需要提示选择账户
     if (shouldPromptAccountIds && !qqbotOverride) {
-      const existingIds = listQQBotAccountIds(moltbotCfg);
+      const existingIds = listQQBotAccountIds(cfg);
       if (existingIds.length > 1) {
         accountId = await prompter.select({
           message: "选择 QQBot 账户",
@@ -93,7 +83,7 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
       }
     }
 
-    let next = moltbotCfg;
+    let next = cfg;
     const resolvedAccount = resolveQQBotAccount(next, accountId);
     const accountConfigured = Boolean(resolvedAccount.appId && resolvedAccount.clientSecret);
     const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
@@ -115,8 +105,10 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
           "4) 你也可以设置环境变量 QQBOT_APP_ID 和 QQBOT_CLIENT_SECRET",
           "",
           "文档: https://bot.q.qq.com/wiki/",
+          "",
+          "此版本支持流式消息发送！",
         ].join("\n"),
-        "QQ Bot 配置",
+        "QQ Bot (Stream) 配置",
       );
     }
 
@@ -241,8 +233,8 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
   disable: (cfg) => ({
     ...cfg,
     channels: {
-      ...(cfg as MoltbotConfig).channels,
-      qqbot: { ...(cfg as MoltbotConfig).channels?.qqbot, enabled: false },
+      ...(cfg as OpenClawConfig).channels,
+      qqbot: { ...(cfg as OpenClawConfig).channels?.qqbot, enabled: false },
     },
   }) as any,
 };
