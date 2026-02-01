@@ -23,6 +23,8 @@ export interface ResolvedQQBotAccount {
   imageServerBaseUrl?: string;
   /** 是否支持 markdown 消息 */
   markdownSupport?: boolean;
+  /** 是否启用流式消息（仅 c2c 私聊支持），默认 true */
+  streamEnabled?: boolean;
   config: QQBotAccountConfig;
 }
 
@@ -43,6 +45,8 @@ export interface QQBotAccountConfig {
   imageServerBaseUrl?: string;
   /** 是否支持 markdown 消息，默认 true */
   markdownSupport?: boolean;
+  /** 是否启用流式消息，默认 true（仅 c2c 私聊支持） */
+  streamEnabled?: boolean;
 }
 
 /**

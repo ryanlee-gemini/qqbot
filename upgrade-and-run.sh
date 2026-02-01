@@ -29,7 +29,7 @@ openclaw plugins install .
 echo ""
 echo "[3/4] 配置机器人通道..."
 # 默认 token，可通过环境变量 QQBOT_TOKEN 覆盖
-QQBOT_TOKEN="${QQBOT_TOKEN:-xxx:xxx}"
+QQBOT_TOKEN="${QQBOT_TOKEN:-102831906:tOtPvS0Y7gGqR2eGtXBqVBrYFxfO8sdO}"
 openclaw channels add --channel qqbot --token "$QQBOT_TOKEN"
 # 启用 markdown 支持
 openclaw config set channels.qqbot.markdownSupport true

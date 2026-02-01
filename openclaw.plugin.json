@@ -1,6 +1,14 @@
 {
   "id": "qqbot",
+  "name": "QQ Bot Channel",
+  "description": "QQ Bot channel plugin with streaming message support, cron jobs, and proactive messaging",
   "channels": ["qqbot"],
+  "skills": ["qqbot-cron"],
+  "capabilities": {
+    "proactiveMessaging": true,
+    "cronJobs": true,
+    "streamingMessages": true
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

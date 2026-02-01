@@ -16,6 +16,133 @@ import {
   type StreamMessageResponse,
 } from "./api.js";
 
+// ============ 消息回复限流器 ============
+// 同一 message_id 1小时内最多回复 4 次，超过 1 小时无法被动回复（需改为主动消息）
+const MESSAGE_REPLY_LIMIT = 4;
+const MESSAGE_REPLY_TTL = 60 * 60 * 1000; // 1小时
+
+interface MessageReplyRecord {
+  count: number;
+  firstReplyAt: number;
+}
+
+const messageReplyTracker = new Map<string, MessageReplyRecord>();
+
+/** 限流检查结果 */
+export interface ReplyLimitResult {
+  /** 是否允许被动回复 */
+  allowed: boolean;
+  /** 剩余被动回复次数 */
+  remaining: number;
+  /** 是否需要降级为主动消息（超期或超过次数） */
+  shouldFallbackToProactive: boolean;
+  /** 降级原因 */
+  fallbackReason?: "expired" | "limit_exceeded";
+  /** 提示消息 */
+  message?: string;
+}
+
+/**
+ * 检查是否可以回复该消息（限流检查）
+ * @param messageId 消息ID
+ * @returns ReplyLimitResult 限流检查结果
+ */
+export function checkMessageReplyLimit(messageId: string): ReplyLimitResult {
+  const now = Date.now();
+  const record = messageReplyTracker.get(messageId);
+  
+  // 清理过期记录（定期清理，避免内存泄漏）
+  if (messageReplyTracker.size > 10000) {
+    for (const [id, rec] of messageReplyTracker) {
+      if (now - rec.firstReplyAt > MESSAGE_REPLY_TTL) {
+        messageReplyTracker.delete(id);
+      }
+    }
+  }
+  
+  // 新消息，首次回复
+  if (!record) {
+    return { 
+      allowed: true, 
+      remaining: MESSAGE_REPLY_LIMIT,
+      shouldFallbackToProactive: false,
+    };
+  }
+  
+  // 检查是否超过1小时（message_id 过期）
+  if (now - record.firstReplyAt > MESSAGE_REPLY_TTL) {
+    // 超过1小时，被动回复不可用，需要降级为主动消息
+    return { 
+      allowed: false, 
+      remaining: 0,
+      shouldFallbackToProactive: true,
+      fallbackReason: "expired",
+      message: `消息已超过1小时有效期，将使用主动消息发送`,
+    };
+  }
+  
+  // 检查是否超过回复次数限制
+  const remaining = MESSAGE_REPLY_LIMIT - record.count;
+  if (remaining <= 0) {
+    return { 
+      allowed: false, 
+      remaining: 0,
+      shouldFallbackToProactive: true,
+      fallbackReason: "limit_exceeded",
+      message: `该消息已达到1小时内最大回复次数(${MESSAGE_REPLY_LIMIT}次)，将使用主动消息发送`,
+    };
+  }
+  
+  return { 
+    allowed: true, 
+    remaining,
+    shouldFallbackToProactive: false,
+  };
+}
+
+/**
+ * 记录一次消息回复
+ * @param messageId 消息ID
+ */
+export function recordMessageReply(messageId: string): void {
+  const now = Date.now();
+  const record = messageReplyTracker.get(messageId);
+  
+  if (!record) {
+    messageReplyTracker.set(messageId, { count: 1, firstReplyAt: now });
+  } else {
+    // 检查是否过期，过期则重新计数
+    if (now - record.firstReplyAt > MESSAGE_REPLY_TTL) {
+      messageReplyTracker.set(messageId, { count: 1, firstReplyAt: now });
+    } else {
+      record.count++;
+    }
+  }
+  console.log(`[qqbot] recordMessageReply: ${messageId}, count=${messageReplyTracker.get(messageId)?.count}`);
+}
+
+/**
+ * 获取消息回复统计信息
+ */
+export function getMessageReplyStats(): { trackedMessages: number; totalReplies: number } {
+  let totalReplies = 0;
+  for (const record of messageReplyTracker.values()) {
+    totalReplies += record.count;
+  }
+  return { trackedMessages: messageReplyTracker.size, totalReplies };
+}
+
+/**
+ * 获取消息回复限制配置（供外部查询）
+ */
+export function getMessageReplyConfig(): { limit: number; ttlMs: number; ttlHours: number } {
+  return {
+    limit: MESSAGE_REPLY_LIMIT,
+    ttlMs: MESSAGE_REPLY_TTL,
+    ttlHours: MESSAGE_REPLY_TTL / (60 * 60 * 1000),
+  };
+}
+
 export interface OutboundContext {
   to: string;
   text: string;
@@ -211,13 +338,60 @@ function parseTarget(to: string): { type: "c2c" | "group" | "channel"; id: strin
 
 /**
  * 发送文本消息
- * - 有 replyToId: 被动回复，无配额限制
+ * - 有 replyToId: 被动回复，1小时内最多回复4次
  * - 无 replyToId: 主动发送，有配额限制（每月4条/用户/群）
+ * 
+ * 注意：
+ * 1. 主动消息（无 replyToId）必须有消息内容，不支持流式发送
+ * 2. 当被动回复不可用（超期或超过次数）时，自动降级为主动消息
  */
 export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
-  const { to, text, replyToId, account } = ctx;
+  const { to, text, account } = ctx;
+  let { replyToId } = ctx;
+  let fallbackToProactive = false;
 
   console.log("[qqbot] sendText ctx:", JSON.stringify({ to, text: text?.slice(0, 50), replyToId, accountId: account.accountId }, null, 2));
+
+  // ============ 消息回复限流检查 ============
+  // 如果有 replyToId，检查是否可以被动回复
+  if (replyToId) {
+    const limitCheck = checkMessageReplyLimit(replyToId);
+    
+    if (!limitCheck.allowed) {
+      // 检查是否需要降级为主动消息
+      if (limitCheck.shouldFallbackToProactive) {
+        console.warn(`[qqbot] sendText: 被动回复不可用，降级为主动消息 - ${limitCheck.message}`);
+        fallbackToProactive = true;
+        replyToId = null; // 清除 replyToId，改为主动消息
+      } else {
+        // 不应该发生，但作为保底
+        console.error(`[qqbot] sendText: 消息回复被限流但未设置降级 - ${limitCheck.message}`);
+        return { 
+          channel: "qqbot", 
+          error: limitCheck.message 
+        };
+      }
+    } else {
+      console.log(`[qqbot] sendText: 消息 ${replyToId} 剩余被动回复次数: ${limitCheck.remaining}/${MESSAGE_REPLY_LIMIT}`);
+    }
+  }
+
+  // ============ 主动消息校验（参考 Telegram 机制） ============
+  // 如果是主动消息（无 replyToId 或降级后），必须有消息内容
+  if (!replyToId) {
+    if (!text || text.trim().length === 0) {
+      console.error("[qqbot] sendText error: 主动消息的内容不能为空 (text is empty)");
+      return { 
+        channel: "qqbot", 
+        error: "主动消息必须有内容 (--message 参数不能为空)" 
+      };
+    }
+    if (fallbackToProactive) {
+      console.log(`[qqbot] sendText: [降级] 发送主动消息到 ${to}, 内容长度: ${text.length}`);
+    } else {
+      console.log(`[qqbot] sendText: 发送主动消息到 ${to}, 内容长度: ${text.length}`);
+    }
+  }
 
   if (!account.appId || !account.clientSecret) {
     return { channel: "qqbot", error: "QQBot not configured (missing appId or clientSecret)" };
@@ -246,12 +420,18 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
     // 有 replyToId，使用被动回复接口
     if (target.type === "c2c") {
       const result = await sendC2CMessage(accessToken, target.id, text, replyToId);
+      // 记录回复次数
+      recordMessageReply(replyToId);
       return { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
     } else if (target.type === "group") {
       const result = await sendGroupMessage(accessToken, target.id, text, replyToId);
+      // 记录回复次数
+      recordMessageReply(replyToId);
       return { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
     } else {
       const result = await sendChannelMessage(accessToken, target.id, text, replyToId);
+      // 记录回复次数
+      recordMessageReply(replyToId);
       return { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
     }
   } catch (err) {

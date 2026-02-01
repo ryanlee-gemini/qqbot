@@ -77,6 +77,7 @@ export function resolveQQBotAccount(
       systemPrompt: qqbot?.systemPrompt,
       imageServerBaseUrl: qqbot?.imageServerBaseUrl,
       markdownSupport: qqbot?.markdownSupport,
+      streamEnabled: qqbot?.streamEnabled,
     };
     appId = qqbot?.appId ?? "";
   } else {
@@ -113,6 +114,7 @@ export function resolveQQBotAccount(
     systemPrompt: accountConfig.systemPrompt,
     imageServerBaseUrl: accountConfig.imageServerBaseUrl || process.env.QQBOT_IMAGE_SERVER_BASE_URL,
     markdownSupport: accountConfig.markdownSupport,
+    streamEnabled: accountConfig.streamEnabled,
     config: accountConfig,
   };
 }
