@@ -31,6 +31,14 @@ interface QQBotChannelConfig {
   }>;
 }
 
+// Prompter 类型定义
+interface Prompter {
+  note: (message: string, title?: string) => Promise<void>;
+  confirm: (opts: { message: string; initialValue?: boolean }) => Promise<boolean>;
+  text: (opts: { message: string; placeholder?: string; initialValue?: string; validate?: (value: string) => string | undefined }) => Promise<string>;
+  select: <T>(opts: { message: string; options: Array<{ value: T; label: string }>; initialValue?: T }) => Promise<T>;
+}
+
 /**
  * 解析默认账户 ID
  */
@@ -46,7 +54,7 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
   channel: "qqbot" as any,
 
   getStatus: async (ctx: ChannelOnboardingStatusContext): Promise<ChannelOnboardingStatus> => {
-    const { cfg } = ctx;
+    const cfg = ctx.cfg as OpenClawConfig;
     const configured = listQQBotAccountIds(cfg).some((accountId) => {
       const account = resolveQQBotAccount(cfg, accountId);
       return Boolean(account.appId && account.clientSecret);
@@ -62,9 +70,12 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
   },
 
   configure: async (ctx: ChannelOnboardingConfigureContext): Promise<ChannelOnboardingResult> => {
-    const { cfg, prompter, accountOverrides, shouldPromptAccountIds } = ctx;
+    const cfg = ctx.cfg as OpenClawConfig;
+    const prompter = ctx.prompter as Prompter;
+    const accountOverrides = ctx.accountOverrides as Record<string, string> | undefined;
+    const shouldPromptAccountIds = ctx.shouldPromptAccountIds;
     
-    const qqbotOverride = (accountOverrides as Record<string, string>).qqbot?.trim();
+    const qqbotOverride = accountOverrides?.qqbot?.trim();
     const defaultAccountId = resolveDefaultQQBotAccountId(cfg);
     let accountId = qqbotOverride ?? defaultAccountId;
 
@@ -83,7 +94,7 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
       }
     }
 
-    let next = cfg;
+    let next: OpenClawConfig = cfg;
     const resolvedAccount = resolveQQBotAccount(next, accountId);
     const accountConfigured = Boolean(resolvedAccount.appId && resolvedAccount.clientSecret);
     const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
@@ -124,7 +135,7 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
           channels: {
             ...next.channels,
             qqbot: {
-              ...next.channels?.qqbot,
+              ...(next.channels?.qqbot as Record<string, unknown> || {}),
               enabled: true,
             },
           },
@@ -136,14 +147,14 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
             message: "请输入 QQ Bot AppID",
             placeholder: "例如: 102146862",
             initialValue: resolvedAccount.appId || undefined,
-            validate: (value) => (value?.trim() ? undefined : "AppID 不能为空"),
+            validate: (value: string) => (value?.trim() ? undefined : "AppID 不能为空"),
           }),
         ).trim();
         clientSecret = String(
           await prompter.text({
             message: "请输入 QQ Bot ClientSecret",
             placeholder: "你的 ClientSecret",
-            validate: (value) => (value?.trim() ? undefined : "ClientSecret 不能为空"),
+            validate: (value: string) => (value?.trim() ? undefined : "ClientSecret 不能为空"),
           }),
         ).trim();
       }
@@ -159,14 +170,14 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
             message: "请输入 QQ Bot AppID",
             placeholder: "例如: 102146862",
             initialValue: resolvedAccount.appId || undefined,
-            validate: (value) => (value?.trim() ? undefined : "AppID 不能为空"),
+            validate: (value: string) => (value?.trim() ? undefined : "AppID 不能为空"),
           }),
         ).trim();
         clientSecret = String(
           await prompter.text({
             message: "请输入 QQ Bot ClientSecret",
             placeholder: "你的 ClientSecret",
-            validate: (value) => (value?.trim() ? undefined : "ClientSecret 不能为空"),
+            validate: (value: string) => (value?.trim() ? undefined : "ClientSecret 不能为空"),
           }),
         ).trim();
       }
@@ -177,14 +188,14 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
           message: "请输入 QQ Bot AppID",
           placeholder: "例如: 102146862",
           initialValue: resolvedAccount.appId || undefined,
-          validate: (value) => (value?.trim() ? undefined : "AppID 不能为空"),
+          validate: (value: string) => (value?.trim() ? undefined : "AppID 不能为空"),
         }),
       ).trim();
       clientSecret = String(
         await prompter.text({
           message: "请输入 QQ Bot ClientSecret",
           placeholder: "你的 ClientSecret",
-          validate: (value) => (value?.trim() ? undefined : "ClientSecret 不能为空"),
+          validate: (value: string) => (value?.trim() ? undefined : "ClientSecret 不能为空"),
         }),
       ).trim();
     }
@@ -197,7 +208,7 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
           channels: {
             ...next.channels,
             qqbot: {
-              ...next.channels?.qqbot,
+              ...(next.channels?.qqbot as Record<string, unknown> || {}),
               enabled: true,
               appId,
               clientSecret,
@@ -210,12 +221,12 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
           channels: {
             ...next.channels,
             qqbot: {
-              ...next.channels?.qqbot,
+              ...(next.channels?.qqbot as Record<string, unknown> || {}),
               enabled: true,
               accounts: {
-                ...(next.channels?.qqbot as QQBotChannelConfig)?.accounts,
+                ...((next.channels?.qqbot as QQBotChannelConfig)?.accounts || {}),
                 [accountId]: {
-                  ...(next.channels?.qqbot as QQBotChannelConfig)?.accounts?.[accountId],
+                  ...((next.channels?.qqbot as QQBotChannelConfig)?.accounts?.[accountId] || {}),
                   enabled: true,
                   appId,
                   clientSecret,
@@ -227,14 +238,17 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
       }
     }
 
-    return { cfg: next as any, accountId };
+    return { success: true, cfg: next as any, accountId };
   },
 
-  disable: (cfg) => ({
-    ...cfg,
-    channels: {
-      ...(cfg as OpenClawConfig).channels,
-      qqbot: { ...(cfg as OpenClawConfig).channels?.qqbot, enabled: false },
-    },
-  }) as any,
+  disable: (cfg: unknown) => {
+    const config = cfg as OpenClawConfig;
+    return {
+      ...config,
+      channels: {
+        ...config.channels,
+        qqbot: { ...(config.channels?.qqbot as Record<string, unknown> || {}), enabled: false },
+      },
+    } as any;
+  },
 };

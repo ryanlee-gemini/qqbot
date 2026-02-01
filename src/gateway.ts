@@ -62,6 +62,56 @@ const STREAM_KEEPALIVE_GAP = 10000; // 状态保持消息之间的间隔（毫�
 const STREAM_KEEPALIVE_MAX_PER_CHUNK = 2; // 每 2 个消息分片之间最多发送的状态保持消息数量
 const STREAM_MAX_DURATION = 3 * 60 * 1000; // 流式消息最大持续时间（毫秒），超过 3 分钟自动结束
 
+// ============ 智能断句配置 ============
+// 首个分片：必须在语义边界处断句，避免奇怪的换行
+const FIRST_CHUNK_MIN_LENGTH_SOFT = 20; // 软下限：达到此长度后，遇到语义边界就可以发送
+const FIRST_CHUNK_MIN_LENGTH_HARD = 80; // 硬下限：超过此长度必须发送，避免等待太久
+const FIRST_CHUNK_MAX_WAIT_TIME = 3000; // 首个分片最长等待时间（毫秒）
+
+// 语义边界检测：判断文本是否在自然断句位置结束
+function isAtSemanticBoundary(text: string): boolean {
+  if (!text) return false;
+  const trimmed = text.trimEnd();
+  if (!trimmed) return false;
+  
+  // 检查最后一个字符是否是断句标点
+  const lastChar = trimmed[trimmed.length - 1];
+  const sentenceEnders = ['。', '！', '？', '~', '…', '.', '!', '?', '\n'];
+  if (sentenceEnders.includes(lastChar)) return true;
+  
+  // 检查是否以 emoji 结尾（常见于提醒消息）
+  const emojiRegex = /[\u{1F300}-\u{1F9FF}]$/u;
+  if (emojiRegex.test(trimmed)) return true;
+  
+  // 检查最后几个字符是否是 markdown 列表项结束（如 "- xxx" 后面）
+  // 不算边界，因为列表通常有多项
+  
+  return false;
+}
+
+// 查找最近的语义边界位置
+function findLastSemanticBoundary(text: string, minPos: number = 0): number {
+  if (!text || text.length <= minPos) return -1;
+  
+  const sentenceEnders = ['。', '！', '？', '~', '.', '!', '?'];
+  let lastBoundary = -1;
+  
+  for (let i = text.length - 1; i >= minPos; i--) {
+    const char = text[i];
+    if (sentenceEnders.includes(char)) {
+      lastBoundary = i + 1; // 包含这个标点符号
+      break;
+    }
+    // 换行符也是边界
+    if (char === '\n') {
+      lastBoundary = i + 1;
+      break;
+    }
+  }
+  
+  return lastBoundary;
+}
+
 // 消息队列配置（异步处理，防止阻塞心跳）
 const MESSAGE_QUEUE_SIZE = 1000; // 最大队列长度
 const MESSAGE_QUEUE_WARN_THRESHOLD = 800; // 队列告警阈值
@@ -394,8 +444,8 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           log?.info(`[qqbot:${account.accountId}] Attachments: ${event.attachments.length}`);
         }
 
-        // 流式消息开关（默认启用，仅 c2c 支持）
-        const streamEnabled = account.streamEnabled !== false;
+        // 流式消息开关（默认禁用，仅 c2c 支持，需要在配置中明确启用）
+        const streamEnabled = account.streamEnabled === true;
         log?.debug?.(`[qqbot:${account.accountId}] Stream enabled: ${streamEnabled}`);
 
         pluginRuntime.channel.activity.record({
@@ -622,7 +672,7 @@ openclaw cron add \\
           log?.info(`[qqbot:${account.accountId}] Stream support: ${supportsStream} (type=${event.type}, enabled=${streamEnabled})`);
           
           // 创建流式发送器
-          const streamSender = supportsStream ? createStreamSender(account, targetTo, event.messageId) : null;
+          let streamSender = supportsStream ? createStreamSender(account, targetTo, event.messageId) : null;
           let streamBuffer = ""; // 累积的全部文本（用于记录完整内容）
           let lastSentLength = 0; // 上次发送时的文本长度（用于计算增量）
           let lastSentText = ""; // 上次发送时的完整文本（用于检测新段落）
@@ -633,6 +683,7 @@ openclaw cron add \\
           let streamStartTime = 0; // 流式消息开始时间（用于超时检查）
           let sendingLock = false; // 发送锁，防止并发发送
           let pendingFullText = ""; // 待发送的完整文本（在锁定期间积累）
+          let firstChunkWaitStart = 0; // 首个分片开始等待的时间（用于超时判断）
           let keepaliveTimer: ReturnType<typeof setTimeout> | null = null; // 心跳定时器
           let keepaliveCountSinceLastChunk = 0; // 自上次分片以来发送的状态保持消息数量
           let lastChunkSendTime = 0; // 上次分片发送时间（用于判断是否需要发送状态保持）
@@ -722,15 +773,13 @@ openclaw cron add \\
           };
           
           // 流式发送函数 - 用于 onPartialReply 实时发送（增量模式）
-          // markdown 分片需要以 \n 结尾
+          // 注意：不要在分片后强制添加换行符，否则会导致消息在奇怪的位置断句
           const sendStreamChunk = async (text: string, isEnd: boolean): Promise<boolean> => {
             if (!streamSender || streamEnded) return false;
             
-            // markdown 分片需要以 \n 结尾（除非是空内容或结束标记）
-            let contentToSend = text;
-            if (isEnd && contentToSend && !contentToSend.endsWith("\n") && !isEnd) {
-              contentToSend = contentToSend + "\n";
-            }
+            // 直接发送文本内容，不添加任何额外换行符
+            // 换行应该由 AI 生成的内容本身决定，而非强制添加
+            const contentToSend = text;
             
             const result = await streamSender.send(contentToSend, isEnd);
             if (result.error) {
@@ -819,8 +868,25 @@ openclaw cron add \\
               (fullText.length < lastSentLength || !fullText.startsWith(lastSentText.slice(0, Math.min(10, lastSentText.length))));
             
             if (isNewSegment) {
-              // 新段落开始，将之前的内容追加到 streamBuffer，并重置发送位置
+              // 新段落开始，结束当前流并创建新流
               log?.info(`[qqbot:${account.accountId}] New segment detected! lastSentLength=${lastSentLength}, newTextLength=${fullText.length}, lastSentText="${lastSentText.slice(0, 20)}...", newText="${fullText.slice(0, 20)}..."`);
+              
+              // 保存旧的 sender 用于结束流
+              const oldStreamSender = streamSender;
+              const oldStreamStarted = streamStarted;
+              const oldStreamEnded = streamEnded;
+              
+              // 1. 先创建新的流式发送器并重置所有状态
+              // 这样在 await 期间到达的新消息会使用新 sender
+              streamSender = createStreamSender(account, targetTo, event.messageId);
+              lastSentLength = 0;
+              lastSentText = "";
+              streamStarted = false;
+              streamEnded = false;
+              streamStartTime = 0;
+              keepaliveCountSinceLastChunk = 0;
+              lastChunkSendTime = 0;
+              firstChunkWaitStart = 0; // 重置首个分片等待时间
               
               // 记录当前段落在 streamBuffer 中的起始位置
               currentSegmentStart = streamBuffer.length;
@@ -831,9 +897,19 @@ openclaw cron add \\
                 currentSegmentStart = streamBuffer.length;
               }
               
-              // 重置发送位置，从新段落开始发送
-              lastSentLength = 0;
-              lastSentText = "";
+              // 2. 结束旧流（如果已开始）- 使用旧的 sender
+              if (oldStreamSender && oldStreamStarted && !oldStreamEnded) {
+                log?.info(`[qqbot:${account.accountId}] Ending current stream before starting new segment`);
+                clearKeepalive();
+                sendingLock = true;
+                try {
+                  await oldStreamSender.send("", true); // 发送结束标记
+                } catch (err) {
+                  log?.error(`[qqbot:${account.accountId}] Failed to end stream: ${err}`);
+                } finally {
+                  sendingLock = false;
+                }
+              }
             }
             
             // 更新当前段落内容到 streamBuffer
@@ -847,8 +923,46 @@ openclaw cron add \\
             if (fullText.length <= lastSentLength) return;
             
             const now = Date.now();
+            
+            // 初始化首个分片等待开始时间（如果还没有开始）
+            if (!streamStarted && !firstChunkWaitStart) {
+              firstChunkWaitStart = now;
+            }
+            
             // 控制发送频率：首次发送或间隔超过阈值
-            if (!streamStarted || now - lastStreamSendTime >= STREAM_CHUNK_INTERVAL) {
+            if (!streamStarted) {
+              // 首个分片：智能断句，在语义边界处发送
+              const waitTime = firstChunkWaitStart ? now - firstChunkWaitStart : 0;
+              const atBoundary = isAtSemanticBoundary(fullText);
+              const reachedSoftLimit = fullText.length >= FIRST_CHUNK_MIN_LENGTH_SOFT;
+              const reachedHardLimit = fullText.length >= FIRST_CHUNK_MIN_LENGTH_HARD;
+              const timedOut = waitTime >= FIRST_CHUNK_MAX_WAIT_TIME;
+              
+              // 发送条件（优先级从高到低）：
+              // 1. 达到硬下限：必须发送，避免等待太久
+              // 2. 等待超时：必须发送，避免无响应
+              // 3. 达到软下限 + 在语义边界：可以发送
+              if (reachedHardLimit || timedOut) {
+                // 硬性条件：必须发送
+                if (timedOut && !reachedSoftLimit) {
+                  log?.info(`[qqbot:${account.accountId}] handlePartialReply: first chunk timeout, sending anyway, length=${fullText.length}, wait=${waitTime}ms`);
+                } else {
+                  log?.info(`[qqbot:${account.accountId}] handlePartialReply: sending first chunk (hard limit), length=${fullText.length}`);
+                }
+                await doStreamSend(fullText, false);
+                firstChunkWaitStart = 0; // 重置等待时间
+              } else if (reachedSoftLimit && atBoundary) {
+                // 软性条件：在语义边界处发送
+                log?.info(`[qqbot:${account.accountId}] handlePartialReply: sending first chunk (at boundary), length=${fullText.length}`);
+                await doStreamSend(fullText, false);
+                firstChunkWaitStart = 0;
+              } else {
+                // 还需要等待更多内容
+                log?.debug?.(`[qqbot:${account.accountId}] handlePartialReply: waiting for semantic boundary, length=${fullText.length}, atBoundary=${atBoundary}, wait=${waitTime}ms`);
+                pendingFullText = fullText;
+              }
+            } else if (now - lastStreamSendTime >= STREAM_CHUNK_INTERVAL) {
+              // 后续分片：基于时间间隔发送
               log?.info(`[qqbot:${account.accountId}] handlePartialReply: sending stream chunk, length=${fullText.length}`);
               await doStreamSend(fullText, false);
             } else {
@@ -1012,11 +1126,14 @@ openclaw cron add \\
                     }
                   }
 
-                  // 只有频道和群聊消息（不支持流式）在 deliver 中发送文本
-                  // c2c 的文本通过 onPartialReply 流式发送
+                  // 非流式模式下，在 deliver 中发送文本
+                  // 流式模式下，c2c 的文本通过 onPartialReply 流式发送
                   if (!supportsStream && textWithoutImages.trim()) {
                     await sendWithTokenRetry(async (token) => {
-                      if (event.type === "group" && event.groupOpenid) {
+                      if (event.type === "c2c") {
+                        // c2c 非流式消息发送
+                        await sendC2CMessage(token, event.senderId, textWithoutImages, event.messageId);
+                      } else if (event.type === "group" && event.groupOpenid) {
                         await sendGroupMessage(token, event.groupOpenid, textWithoutImages, event.messageId);
                       } else if (event.channelId) {
                         await sendChannelMessage(token, event.channelId, textWithoutImages, event.messageId);

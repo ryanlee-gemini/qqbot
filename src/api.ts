@@ -269,14 +269,21 @@ function buildStreamBody(
   msgSeq: number,
   stream?: StreamConfig
 ): Record<string, unknown> {
+  // 流式 markdown 消息要求每个分片内容必须以换行符结尾
+  // QQ API 错误码 40034017: "流式消息md分片需要\n结束"
+  let finalContent = content;
+  if (stream && currentMarkdownSupport && content && !content.endsWith("\n")) {
+    finalContent = content + "\n";
+  }
+
   const body: Record<string, unknown> = currentMarkdownSupport
     ? {
-        markdown: { content },
+        markdown: { content: finalContent },
         msg_type: 2,
         msg_seq: msgSeq,
       }
     : {
-        content,
+        content: finalContent,
         msg_type: 0,
         msg_seq: msgSeq,
       };

@@ -168,7 +168,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     },
     sendMedia: async ({ to, text, mediaUrl, accountId, replyToId, cfg }) => {
       const account = resolveQQBotAccount(cfg, accountId);
-      const result = await sendMedia({ to, text, mediaUrl, accountId, replyToId, account });
+      const result = await sendMedia({ to, text: text ?? "", mediaUrl: mediaUrl ?? "", accountId, replyToId, account });
       return {
         channel: "qqbot",
         messageId: result.messageId,
@@ -221,13 +221,13 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         }
         const accounts = qqbot.accounts as Record<string, Record<string, unknown>> | undefined;
         if (accounts && accountId in accounts) {
-          const entry = accounts[accountId];
+          const entry = accounts[accountId] as Record<string, unknown> | undefined;
           if (entry && "clientSecret" in entry) {
             delete entry.clientSecret;
             cleared = true;
             changed = true;
           }
-          if (Object.keys(entry).length === 0) {
+          if (entry && Object.keys(entry).length === 0) {
             delete accounts[accountId];
             changed = true;
           }
@@ -236,14 +236,16 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
 
       if (changed && nextQQBot) {
         nextCfg.channels = { ...nextCfg.channels, qqbot: nextQQBot };
-        await getQQBotRuntime().config.writeConfigFile(nextCfg);
+        const runtime = getQQBotRuntime();
+        const configApi = runtime.config as { writeConfigFile: (cfg: OpenClawConfig) => Promise<void> };
+        await configApi.writeConfigFile(nextCfg);
       }
 
       const resolved = resolveQQBotAccount(changed ? nextCfg : cfg, accountId);
       const loggedOut = resolved.secretSource === "none";
       const envToken = Boolean(process.env.QQBOT_CLIENT_SECRET);
 
-      return { cleared, envToken, loggedOut };
+      return { ok: true, cleared, envToken, loggedOut };
     },
   },
   status: {
@@ -257,7 +259,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       lastOutboundAt: null,
     },
     // 新增：构建通道摘要
-    buildChannelSummary: ({ snapshot }) => ({
+    buildChannelSummary: ({ snapshot }: { snapshot: Record<string, unknown> }) => ({
       configured: snapshot.configured ?? false,
       tokenSource: snapshot.tokenSource ?? "none",
       running: snapshot.running ?? false,
@@ -265,7 +267,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       lastConnectedAt: snapshot.lastConnectedAt ?? null,
       lastError: snapshot.lastError ?? null,
     }),
-    buildAccountSnapshot: ({ account, runtime }) => ({
+    buildAccountSnapshot: ({ account, runtime }: { account?: ResolvedQQBotAccount; runtime?: Record<string, unknown> }) => ({
       accountId: account?.accountId ?? DEFAULT_ACCOUNT_ID,
       name: account?.name,
       enabled: account?.enabled ?? false,
