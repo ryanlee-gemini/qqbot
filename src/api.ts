@@ -1,8 +1,6 @@
 /**
- * QQ Bot API 鉴权和请求封装（支持流式消息）
+ * QQ Bot API 鉴权和请求封装
  */
-
-import { StreamState, type StreamConfig } from "./types.js";
 
 const API_BASE = "https://api.sgroup.qq.com";
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
@@ -245,45 +243,35 @@ export async function getGatewayUrl(accessToken: string): Promise<string> {
   return data.url;
 }
 
-// ============ 流式消息发送接口 ============
+// ============ 消息发送接口 ============
 
 /**
- * 流式消息响应
+ * 消息响应
  */
-export interface StreamMessageResponse {
+export interface MessageResponse {
   id: string;
   timestamp: number | string;
-  /** 流式消息ID，用于后续分片 */
-  stream_id?: string;
 }
 
 /**
- * 构建流式消息体
+ * 构建消息体
  * 根据 markdownSupport 配置决定消息格式：
  * - markdown 模式: { markdown: { content }, msg_type: 2 }
  * - 纯文本模式: { content, msg_type: 0 }
  */
-function buildStreamBody(
+function buildMessageBody(
   content: string,
   msgId: string | undefined,
-  msgSeq: number,
-  stream?: StreamConfig
+  msgSeq: number
 ): Record<string, unknown> {
-  // 流式 markdown 消息要求每个分片内容必须以换行符结尾
-  // QQ API 错误码 40034017: "流式消息md分片需要\n结束"
-  let finalContent = content;
-  if (stream && currentMarkdownSupport && content && !content.endsWith("\n")) {
-    finalContent = content + "\n";
-  }
-
   const body: Record<string, unknown> = currentMarkdownSupport
     ? {
-        markdown: { content: finalContent },
+        markdown: { content },
         msg_type: 2,
         msg_seq: msgSeq,
       }
     : {
-        content: finalContent,
+        content,
         msg_type: 0,
         msg_seq: msgSeq,
       };
@@ -292,29 +280,20 @@ function buildStreamBody(
     body.msg_id = msgId;
   }
 
-  if (stream) {
-    body.stream = {
-      state: stream.state,
-      index: stream.index,
-      ...(stream.id ? { id: stream.id } : {}),
-    };
-  }
-
   return body;
 }
 
 /**
- * 发送 C2C 单聊消息（支持流式）
+ * 发送 C2C 单聊消息
  */
 export async function sendC2CMessage(
   accessToken: string,
   openid: string,
   content: string,
-  msgId?: string,
-  stream?: StreamConfig
-): Promise<StreamMessageResponse> {
+  msgId?: string
+): Promise<MessageResponse> {
   const msgSeq = msgId ? getNextMsgSeq(msgId) : 1;
-  const body = buildStreamBody(content, msgId, msgSeq, stream);
+  const body = buildMessageBody(content, msgId, msgSeq);
   
   return apiRequest(accessToken, "POST", `/v2/users/${openid}/messages`, body);
 }
@@ -358,17 +337,16 @@ export async function sendChannelMessage(
 }
 
 /**
- * 发送群聊消息（支持流式）
+ * 发送群聊消息
  */
 export async function sendGroupMessage(
   accessToken: string,
   groupOpenid: string,
   content: string,
-  msgId?: string,
-  stream?: StreamConfig
-): Promise<StreamMessageResponse> {
+  msgId?: string
+): Promise<MessageResponse> {
   const msgSeq = msgId ? getNextMsgSeq(msgId) : 1;
-  const body = buildStreamBody(content, msgId, msgSeq, stream);
+  const body = buildMessageBody(content, msgId, msgSeq);
   
   return apiRequest(accessToken, "POST", `/v2/groups/${groupOpenid}/messages`, body);
 }

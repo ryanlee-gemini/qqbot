@@ -8,15 +8,14 @@ import {
 
 import type { ResolvedQQBotAccount } from "./types.js";
 import { DEFAULT_ACCOUNT_ID, listQQBotAccountIds, resolveQQBotAccount, applyQQBotAccountConfig, resolveDefaultQQBotAccountId } from "./config.js";
-import { sendText, sendMedia, createStreamSender, sendTextStream, StreamSender } from "./outbound.js";
+import { sendText, sendMedia } from "./outbound.js";
 import { startGateway } from "./gateway.js";
 import { qqbotOnboardingAdapter } from "./onboarding.js";
 import { getQQBotRuntime } from "./runtime.js";
 
 /**
  * 简单的文本分块函数
- * QQ Bot 使用流式消息时，不需要预先分块，而是在发送时逐步累积
- * 但框架可能调用此函数来预分块长文本
+ * 用于预先分块长文本
  */
 function chunkText(text: string, limit: number): string[] {
   if (text.length <= limit) return [text];
@@ -52,10 +51,10 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   id: "qqbot",
   meta: {
     id: "qqbot",
-    label: "QQ Bot (Stream)",
-    selectionLabel: "QQ Bot (Stream)",
+    label: "QQ Bot",
+    selectionLabel: "QQ Bot",
     docsPath: "/docs/channels/qqbot",
-    blurb: "Connect to QQ via official QQ Bot API with streaming message support",
+    blurb: "Connect to QQ via official QQ Bot API",
     order: 50,
   },
   capabilities: {
@@ -67,7 +66,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
      * blockStreaming: true 表示该 Channel 支持块流式
      * 框架会收集流式响应，然后通过 deliver 回调发送
      */
-    blockStreaming: true,
+    blockStreaming: false,
   },
   reload: { configPrefixes: ["channels.qqbot"] },
   // CLI onboarding wizard
@@ -180,7 +179,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     startAccount: async (ctx) => {
       const { account, abortSignal, log, cfg } = ctx;
 
-      log?.info(`[qqbot:${account.accountId}] Starting gateway (stream-enabled)`);
+      log?.info(`[qqbot:${account.accountId}] Starting gateway`);
 
       await startGateway({
         account,
@@ -282,36 +281,3 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     }),
   },
 };
-
-/**
- * 导出流式消息工具函数，供外部使用
- * 
- * 使用示例：
- * ```typescript
- * import { createStreamSender } from "qqbot";
- * 
- * // 创建流式发送器
- * const sender = createStreamSender(account, "group:xxx", replyMsgId);
- * 
- * // 发送第一个分片 (state=1, index=0, id="")
- * await sender.send("Hello, ", false);
- * 
- * // 发送中间分片 (state=1, index=1, id=从上次响应获取)
- * await sender.send("Hello, this is ", false);
- * 
- * // 发送最后分片并结束 (state=10, index=2)
- * await sender.end("Hello, this is a streaming message!");
- * ```
- * 
- * 或使用 AsyncGenerator：
- * ```typescript
- * async function* generateText() {
- *   yield "Hello, ";
- *   yield "this is ";
- *   yield "a streaming message!";
- * }
- * 
- * await sendTextStream(ctx, generateText());
- * ```
- */
-export { createStreamSender, sendTextStream, StreamSender };

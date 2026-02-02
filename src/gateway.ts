@@ -1,13 +1,11 @@
 import WebSocket from "ws";
 import path from "node:path";
 import type { ResolvedQQBotAccount, WSPayload, C2CMessageEvent, GuildMessageEvent, GroupMessageEvent } from "./types.js";
-import { StreamState } from "./types.js";
 import { getAccessToken, getGatewayUrl, sendC2CMessage, sendChannelMessage, sendGroupMessage, clearTokenCache, sendC2CImageMessage, sendGroupImageMessage, initApiConfig, startBackgroundTokenRefresh, stopBackgroundTokenRefresh } from "./api.js";
 import { loadSession, saveSession, clearSession, type SessionState } from "./session-store.js";
 import { recordKnownUser, flushKnownUsers } from "./known-users.js";
 import { getQQBotRuntime } from "./runtime.js";
 import { startImageServer, saveImage, saveImageFromPath, isImageServerRunning, downloadFile, type ImageServerConfig } from "./image-server.js";
-import { createStreamSender } from "./outbound.js";
 
 // QQ Bot intents - 按权限级别分组
 const INTENTS = {
@@ -53,64 +51,6 @@ const QUICK_DISCONNECT_THRESHOLD = 5000; // 5秒内断开视为快速断开
 const IMAGE_SERVER_PORT = parseInt(process.env.QQBOT_IMAGE_SERVER_PORT || "18765", 10);
 // 使用绝对路径，确保文件保存和读取使用同一目录
 const IMAGE_SERVER_DIR = process.env.QQBOT_IMAGE_SERVER_DIR || path.join(process.env.HOME || "/home/ubuntu", "clawd", "qqbot-images");
-
-// 流式消息配置
-const STREAM_CHUNK_INTERVAL = 500; // 流式消息分片间隔（毫秒）
-const STREAM_MIN_CHUNK_SIZE = 10; // 最小分片大小（字符）
-const STREAM_KEEPALIVE_FIRST_DELAY = 3000; // 首次状态保持延迟（毫秒），openclaw 3s 内未回复时发送
-const STREAM_KEEPALIVE_GAP = 10000; // 状态保持消息之间的间隔（毫秒）
-const STREAM_KEEPALIVE_MAX_PER_CHUNK = 2; // 每 2 个消息分片之间最多发送的状态保持消息数量
-const STREAM_MAX_DURATION = 3 * 60 * 1000; // 流式消息最大持续时间（毫秒），超过 3 分钟自动结束
-
-// ============ 智能断句配置 ============
-// 首个分片：必须在语义边界处断句，避免奇怪的换行
-const FIRST_CHUNK_MIN_LENGTH_SOFT = 20; // 软下限：达到此长度后，遇到语义边界就可以发送
-const FIRST_CHUNK_MIN_LENGTH_HARD = 80; // 硬下限：超过此长度必须发送，避免等待太久
-const FIRST_CHUNK_MAX_WAIT_TIME = 3000; // 首个分片最长等待时间（毫秒）
-
-// 语义边界检测：判断文本是否在自然断句位置结束
-function isAtSemanticBoundary(text: string): boolean {
-  if (!text) return false;
-  const trimmed = text.trimEnd();
-  if (!trimmed) return false;
-  
-  // 检查最后一个字符是否是断句标点
-  const lastChar = trimmed[trimmed.length - 1];
-  const sentenceEnders = ['。', '！', '？', '~', '…', '.', '!', '?', '\n'];
-  if (sentenceEnders.includes(lastChar)) return true;
-  
-  // 检查是否以 emoji 结尾（常见于提醒消息）
-  const emojiRegex = /[\u{1F300}-\u{1F9FF}]$/u;
-  if (emojiRegex.test(trimmed)) return true;
-  
-  // 检查最后几个字符是否是 markdown 列表项结束（如 "- xxx" 后面）
-  // 不算边界，因为列表通常有多项
-  
-  return false;
-}
-
-// 查找最近的语义边界位置
-function findLastSemanticBoundary(text: string, minPos: number = 0): number {
-  if (!text || text.length <= minPos) return -1;
-  
-  const sentenceEnders = ['。', '！', '？', '~', '.', '!', '?'];
-  let lastBoundary = -1;
-  
-  for (let i = text.length - 1; i >= minPos; i--) {
-    const char = text[i];
-    if (sentenceEnders.includes(char)) {
-      lastBoundary = i + 1; // 包含这个标点符号
-      break;
-    }
-    // 换行符也是边界
-    if (char === '\n') {
-      lastBoundary = i + 1;
-      break;
-    }
-  }
-  
-  return lastBoundary;
-}
 
 // 消息队列配置（异步处理，防止阻塞心跳）
 const MESSAGE_QUEUE_SIZE = 1000; // 最大队列长度
@@ -444,10 +384,6 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           log?.info(`[qqbot:${account.accountId}] Attachments: ${event.attachments.length}`);
         }
 
-        // 流式消息开关（默认禁用，仅 c2c 支持，需要在配置中明确启用）
-        const streamEnabled = account.streamEnabled === true;
-        log?.debug?.(`[qqbot:${account.accountId}] Stream enabled: ${streamEnabled}`);
-
         pluginRuntime.channel.activity.record({
           channel: "qqbot",
           accountId: account.accountId,
@@ -516,8 +452,7 @@ openclaw cron add \\
 
 ⚠️ 重要注意事项：
 1. --at 参数格式：相对时间用 \`5m\`、\`1h\` 等（不要加 + 号！）；绝对时间用完整 ISO 格式
-2. 定时提醒消息不支持流式发送，命令中不要添加 --stream 参数
-3. --message 参数必须有实际内容，不能为空字符串`;
+2. --message 参数必须有实际内容，不能为空字符串`;
 
         // 只有配置了图床公网地址，才告诉 AI 可以发送图片
         if (imageServerBaseUrl) {
@@ -661,315 +596,11 @@ openclaw cron add \\
             }, responseTimeout);
           });
 
-          // ============ 流式消息发送器 ============
+          // ============ 消息发送目标 ============
           // 确定发送目标
           const targetTo = event.type === "c2c" ? event.senderId
                         : event.type === "group" ? `group:${event.groupOpenid}`
                         : `channel:${event.channelId}`;
-          
-          // 判断是否支持流式（仅 c2c 支持，群聊不支持流式，且需要开关启用）
-          const supportsStream = event.type === "c2c" && streamEnabled;
-          log?.info(`[qqbot:${account.accountId}] Stream support: ${supportsStream} (type=${event.type}, enabled=${streamEnabled})`);
-          
-          // 创建流式发送器
-          let streamSender = supportsStream ? createStreamSender(account, targetTo, event.messageId) : null;
-          let streamBuffer = ""; // 累积的全部文本（用于记录完整内容）
-          let lastSentLength = 0; // 上次发送时的文本长度（用于计算增量）
-          let lastSentText = ""; // 上次发送时的完整文本（用于检测新段落）
-          let currentSegmentStart = 0; // 当前段落在 streamBuffer 中的起始位置
-          let lastStreamSendTime = 0; // 上次流式发送时间
-          let streamStarted = false; // 是否已开始流式发送
-          let streamEnded = false; // 流式是否已结束
-          let streamStartTime = 0; // 流式消息开始时间（用于超时检查）
-          let sendingLock = false; // 发送锁，防止并发发送
-          let pendingFullText = ""; // 待发送的完整文本（在锁定期间积累）
-          let firstChunkWaitStart = 0; // 首个分片开始等待的时间（用于超时判断）
-          let keepaliveTimer: ReturnType<typeof setTimeout> | null = null; // 心跳定时器
-          let keepaliveCountSinceLastChunk = 0; // 自上次分片以来发送的状态保持消息数量
-          let lastChunkSendTime = 0; // 上次分片发送时间（用于判断是否需要发送状态保持）
-          
-          // 清理心跳定时器
-          const clearKeepalive = () => {
-            if (keepaliveTimer) {
-              clearTimeout(keepaliveTimer);
-              keepaliveTimer = null;
-            }
-          };
-          
-          // 重置心跳定时器（每次发送后调用）
-          // isContentChunk: 是否为内容分片（非状态保持消息）
-          const resetKeepalive = (isContentChunk: boolean = false) => {
-            clearKeepalive();
-            
-            // 如果是内容分片，重置状态保持计数器和时间
-            if (isContentChunk) {
-              keepaliveCountSinceLastChunk = 0;
-              lastChunkSendTime = Date.now();
-            }
-            
-            if (streamSender && streamStarted && !streamEnded) {
-              // 计算下次状态保持消息的延迟时间
-              // - 首次：3s（STREAM_KEEPALIVE_FIRST_DELAY）
-              // - 后续：10s（STREAM_KEEPALIVE_GAP）
-              const delay = keepaliveCountSinceLastChunk === 0 
-                ? STREAM_KEEPALIVE_FIRST_DELAY 
-                : STREAM_KEEPALIVE_GAP;
-              
-              keepaliveTimer = setTimeout(async () => {
-                // 检查流式消息是否超时（超过 3 分钟自动结束）
-                const elapsed = Date.now() - streamStartTime;
-                if (elapsed >= STREAM_MAX_DURATION) {
-                  log?.info(`[qqbot:${account.accountId}] Stream timeout after ${Math.round(elapsed / 1000)}s, auto ending stream`);
-                  if (!streamEnded && !sendingLock) {
-                    sendingLock = true;
-                    try {
-                      // 发送结束标记
-                      await streamSender!.send("", true);
-                      streamEnded = true;
-                      clearKeepalive();
-                    } catch (err) {
-                      log?.error(`[qqbot:${account.accountId}] Stream auto-end failed: ${err}`);
-                    } finally {
-                      sendingLock = false;
-                    }
-                  }
-                  return; // 超时后不再继续心跳
-                }
-                
-                // 检查是否已达到每2个分片之间的最大状态保持消息数量
-                if (keepaliveCountSinceLastChunk >= STREAM_KEEPALIVE_MAX_PER_CHUNK) {
-                  log?.debug?.(`[qqbot:${account.accountId}] Max keepalive reached (${keepaliveCountSinceLastChunk}/${STREAM_KEEPALIVE_MAX_PER_CHUNK}), waiting for next content chunk`);
-                  // 不再发送状态保持，但继续监控超时
-                  resetKeepalive(false);
-                  return;
-                }
-                
-                // 检查距上次分片是否超过 3s
-                const timeSinceLastChunk = Date.now() - lastChunkSendTime;
-                if (timeSinceLastChunk < STREAM_KEEPALIVE_FIRST_DELAY) {
-                  // 还未到发送状态保持的时机，继续等待
-                  resetKeepalive(false);
-                  return;
-                }
-                
-                // 发送状态保持消息
-                if (!streamEnded && !sendingLock) {
-                  log?.info(`[qqbot:${account.accountId}] Sending keepalive #${keepaliveCountSinceLastChunk + 1} (elapsed: ${Math.round(elapsed / 1000)}s, since chunk: ${Math.round(timeSinceLastChunk / 1000)}s)`);
-                  sendingLock = true;
-                  try {
-                    // 发送空内容
-                    await streamSender!.send("", false);
-                    lastStreamSendTime = Date.now();
-                    keepaliveCountSinceLastChunk++;
-                    resetKeepalive(false); // 继续下一个状态保持（非内容分片）
-                  } catch (err) {
-                    log?.error(`[qqbot:${account.accountId}] Keepalive failed: ${err}`);
-                  } finally {
-                    sendingLock = false;
-                  }
-                }
-              }, delay);
-            }
-          };
-          
-          // 流式发送函数 - 用于 onPartialReply 实时发送（增量模式）
-          // 注意：不要在分片后强制添加换行符，否则会导致消息在奇怪的位置断句
-          const sendStreamChunk = async (text: string, isEnd: boolean): Promise<boolean> => {
-            if (!streamSender || streamEnded) return false;
-            
-            // 直接发送文本内容，不添加任何额外换行符
-            // 换行应该由 AI 生成的内容本身决定，而非强制添加
-            const contentToSend = text;
-            
-            const result = await streamSender.send(contentToSend, isEnd);
-            if (result.error) {
-              log?.error(`[qqbot:${account.accountId}] Stream send error: ${result.error}`);
-              return false;
-            } else {
-              log?.debug?.(`[qqbot:${account.accountId}] Stream chunk sent, index: ${streamSender.getContext().index - 1}, isEnd: ${isEnd}, text: "${text.slice(0, 50)}..."`);
-            }
-            
-            if (isEnd) {
-              streamEnded = true;
-              clearKeepalive();
-            } else {
-              // 发送成功后重置心跳，如果是有内容的分片则重置计数器
-              const isContentChunk = text.length > 0;
-              resetKeepalive(isContentChunk);
-            }
-            return true;
-          };
-          
-          // 执行一次流式发送（带锁保护）
-          const doStreamSend = async (fullText: string, forceEnd: boolean = false): Promise<void> => {
-            // 如果正在发送，记录待发送的完整文本，稍后处理
-            if (sendingLock) {
-              pendingFullText = fullText;
-              return;
-            }
-            
-            sendingLock = true;
-            try {
-              // 发送当前增量
-              if (fullText.length > lastSentLength) {
-                const increment = fullText.slice(lastSentLength);
-                // 首次发送前，先设置流式状态和开始时间
-                if (!streamStarted) {
-                  streamStarted = true;
-                  streamStartTime = Date.now();
-                  log?.info(`[qqbot:${account.accountId}] Stream started, max duration: ${STREAM_MAX_DURATION / 1000}s`);
-                }
-                const success = await sendStreamChunk(increment, forceEnd);
-                if (success) {
-                  lastSentLength = fullText.length;
-                  lastSentText = fullText; // 记录完整发送文本，用于检测新段落
-                  lastStreamSendTime = Date.now();
-                  log?.info(`[qqbot:${account.accountId}] Stream partial #${streamSender!.getContext().index}, increment: ${increment.length} chars, total: ${fullText.length} chars`);
-                }
-              } else if (forceEnd && !streamEnded) {
-                // 没有新内容但需要结束
-                await sendStreamChunk("", true);
-              }
-            } finally {
-              sendingLock = false;
-            }
-            
-            // 处理在锁定期间积累的内容
-            if (pendingFullText && pendingFullText.length > lastSentLength && !streamEnded) {
-              const pending = pendingFullText;
-              pendingFullText = "";
-              // 递归发送积累的内容（不强制结束）
-              await doStreamSend(pending, false);
-            }
-          };
-          
-          // onPartialReply 回调 - 实时接收 AI 生成的文本（payload.text 是累积的全文）
-          // 注意：agent 在一次对话中可能产生多个回复段落（如思考、工具调用后继续回复）
-          // 每个新段落的 text 会从头开始累积，需要检测并处理
-          const handlePartialReply = async (payload: { text?: string }) => {
-            if (!streamSender || streamEnded) {
-              log?.debug?.(`[qqbot:${account.accountId}] handlePartialReply skipped: streamSender=${!!streamSender}, streamEnded=${streamEnded}`);
-              return;
-            }
-            
-            const fullText = payload.text ?? "";
-            if (!fullText) {
-              log?.debug?.(`[qqbot:${account.accountId}] handlePartialReply: empty text`);
-              return;
-            }
-            
-            hasResponse = true;
-            
-            // 检测是否是新段落：
-            // 1. lastSentText 不为空（说明已经发送过内容）
-            // 2. 当前文本不是以 lastSentText 开头（说明不是同一段落的增量）
-            // 3. 当前文本长度小于 lastSentLength（说明文本被重置了）
-            const isNewSegment = lastSentText.length > 0 && 
-              (fullText.length < lastSentLength || !fullText.startsWith(lastSentText.slice(0, Math.min(10, lastSentText.length))));
-            
-            if (isNewSegment) {
-              // 新段落开始，结束当前流并创建新流
-              log?.info(`[qqbot:${account.accountId}] New segment detected! lastSentLength=${lastSentLength}, newTextLength=${fullText.length}, lastSentText="${lastSentText.slice(0, 20)}...", newText="${fullText.slice(0, 20)}..."`);
-              
-              // 保存旧的 sender 用于结束流
-              const oldStreamSender = streamSender;
-              const oldStreamStarted = streamStarted;
-              const oldStreamEnded = streamEnded;
-              
-              // 1. 先创建新的流式发送器并重置所有状态
-              // 这样在 await 期间到达的新消息会使用新 sender
-              streamSender = createStreamSender(account, targetTo, event.messageId);
-              lastSentLength = 0;
-              lastSentText = "";
-              streamStarted = false;
-              streamEnded = false;
-              streamStartTime = 0;
-              keepaliveCountSinceLastChunk = 0;
-              lastChunkSendTime = 0;
-              firstChunkWaitStart = 0; // 重置首个分片等待时间
-              
-              // 记录当前段落在 streamBuffer 中的起始位置
-              currentSegmentStart = streamBuffer.length;
-              
-              // 追加换行分隔符（如果前面有内容且不以换行结尾）
-              if (streamBuffer.length > 0 && !streamBuffer.endsWith("\n")) {
-                streamBuffer += "\n\n";
-                currentSegmentStart = streamBuffer.length;
-              }
-              
-              // 2. 结束旧流（如果已开始）- 使用旧的 sender
-              if (oldStreamSender && oldStreamStarted && !oldStreamEnded) {
-                log?.info(`[qqbot:${account.accountId}] Ending current stream before starting new segment`);
-                clearKeepalive();
-                sendingLock = true;
-                try {
-                  await oldStreamSender.send("", true); // 发送结束标记
-                } catch (err) {
-                  log?.error(`[qqbot:${account.accountId}] Failed to end stream: ${err}`);
-                } finally {
-                  sendingLock = false;
-                }
-              }
-            }
-            
-            // 更新当前段落内容到 streamBuffer
-            // streamBuffer = 之前的段落内容 + 当前段落的完整内容
-            const beforeCurrentSegment = streamBuffer.slice(0, currentSegmentStart);
-            streamBuffer = beforeCurrentSegment + fullText;
-            
-            log?.debug?.(`[qqbot:${account.accountId}] handlePartialReply: fullText.length=${fullText.length}, lastSentLength=${lastSentLength}, streamBuffer.length=${streamBuffer.length}, isNewSegment=${isNewSegment}`);
-            
-            // 如果没有新内容，跳过
-            if (fullText.length <= lastSentLength) return;
-            
-            const now = Date.now();
-            
-            // 初始化首个分片等待开始时间（如果还没有开始）
-            if (!streamStarted && !firstChunkWaitStart) {
-              firstChunkWaitStart = now;
-            }
-            
-            // 控制发送频率：首次发送或间隔超过阈值
-            if (!streamStarted) {
-              // 首个分片：智能断句，在语义边界处发送
-              const waitTime = firstChunkWaitStart ? now - firstChunkWaitStart : 0;
-              const atBoundary = isAtSemanticBoundary(fullText);
-              const reachedSoftLimit = fullText.length >= FIRST_CHUNK_MIN_LENGTH_SOFT;
-              const reachedHardLimit = fullText.length >= FIRST_CHUNK_MIN_LENGTH_HARD;
-              const timedOut = waitTime >= FIRST_CHUNK_MAX_WAIT_TIME;
-              
-              // 发送条件（优先级从高到低）：
-              // 1. 达到硬下限：必须发送，避免等待太久
-              // 2. 等待超时：必须发送，避免无响应
-              // 3. 达到软下限 + 在语义边界：可以发送
-              if (reachedHardLimit || timedOut) {
-                // 硬性条件：必须发送
-                if (timedOut && !reachedSoftLimit) {
-                  log?.info(`[qqbot:${account.accountId}] handlePartialReply: first chunk timeout, sending anyway, length=${fullText.length}, wait=${waitTime}ms`);
-                } else {
-                  log?.info(`[qqbot:${account.accountId}] handlePartialReply: sending first chunk (hard limit), length=${fullText.length}`);
-                }
-                await doStreamSend(fullText, false);
-                firstChunkWaitStart = 0; // 重置等待时间
-              } else if (reachedSoftLimit && atBoundary) {
-                // 软性条件：在语义边界处发送
-                log?.info(`[qqbot:${account.accountId}] handlePartialReply: sending first chunk (at boundary), length=${fullText.length}`);
-                await doStreamSend(fullText, false);
-                firstChunkWaitStart = 0;
-              } else {
-                // 还需要等待更多内容
-                log?.debug?.(`[qqbot:${account.accountId}] handlePartialReply: waiting for semantic boundary, length=${fullText.length}, atBoundary=${atBoundary}, wait=${waitTime}ms`);
-                pendingFullText = fullText;
-              }
-            } else if (now - lastStreamSendTime >= STREAM_CHUNK_INTERVAL) {
-              // 后续分片：基于时间间隔发送
-              log?.info(`[qqbot:${account.accountId}] handlePartialReply: sending stream chunk, length=${fullText.length}`);
-              await doStreamSend(fullText, false);
-            } else {
-              // 不到发送时间，但记录待发送内容，确保最终会被发送
-              pendingFullText = fullText;
-            }
-          };
 
           const dispatchPromise = pluginRuntime.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
             ctx: ctxPayload,
@@ -986,17 +617,6 @@ openclaw cron add \\
                 log?.info(`[qqbot:${account.accountId}] deliver called, kind: ${info.kind}, payload keys: ${Object.keys(payload).join(", ")}`);
 
                 let replyText = payload.text ?? "";
-                
-                // 更新当前段落内容到 streamBuffer
-                // deliver 中的 replyText 是当前段落的完整文本
-                if (replyText.length > 0) {
-                  const beforeCurrentSegment = streamBuffer.slice(0, currentSegmentStart);
-                  const newStreamBuffer = beforeCurrentSegment + replyText;
-                  if (newStreamBuffer.length > streamBuffer.length) {
-                    streamBuffer = newStreamBuffer;
-                    log?.debug?.(`[qqbot:${account.accountId}] deliver: updated streamBuffer, replyText=${replyText.length}, total=${streamBuffer.length}`);
-                  }
-                }
                 
                 // 收集所有图片路径
                 const imageUrls: string[] = [];
@@ -1126,12 +746,10 @@ openclaw cron add \\
                     }
                   }
 
-                  // 非流式模式下，在 deliver 中发送文本
-                  // 流式模式下，c2c 的文本通过 onPartialReply 流式发送
-                  if (!supportsStream && textWithoutImages.trim()) {
+                  // 发送文本消息
+                  if (textWithoutImages.trim()) {
                     await sendWithTokenRetry(async (token) => {
                       if (event.type === "c2c") {
-                        // c2c 非流式消息发送
                         await sendC2CMessage(token, event.senderId, textWithoutImages, event.messageId);
                       } else if (event.type === "group" && event.groupOpenid) {
                         await sendGroupMessage(token, event.groupOpenid, textWithoutImages, event.messageId);
@@ -1139,7 +757,7 @@ openclaw cron add \\
                         await sendChannelMessage(token, event.channelId, textWithoutImages, event.messageId);
                       }
                     });
-                    log?.info(`[qqbot:${account.accountId}] Sent text reply (${event.type}, non-stream)`);
+                    log?.info(`[qqbot:${account.accountId}] Sent text reply (${event.type})`);
                   }
 
                   pluginRuntime.channel.activity.record({
@@ -1159,27 +777,6 @@ openclaw cron add \\
                   timeoutId = null;
                 }
                 
-                // 清理心跳定时器
-                clearKeepalive();
-                
-                // 如果在流式模式中出错，发送结束标记（增量模式）
-                if (streamSender && !streamEnded && streamBuffer) {
-                  try {
-                    // 等待发送锁释放
-                    while (sendingLock) {
-                      await new Promise(resolve => setTimeout(resolve, 50));
-                    }
-                    // 发送剩余增量 + 错误标记
-                    const remainingIncrement = streamBuffer.slice(lastSentLength);
-                    const errorIncrement = remainingIncrement + "\n\n[生成中断]";
-                    await streamSender.end(errorIncrement);
-                    streamEnded = true;
-                    log?.info(`[qqbot:${account.accountId}] Stream ended due to error`);
-                  } catch (endErr) {
-                    log?.error(`[qqbot:${account.accountId}] Failed to end stream: ${endErr}`);
-                  }
-                }
-                
                 // 发送错误提示给用户，显示完整错误信息
                 const errMsg = String(err);
                 if (errMsg.includes("401") || errMsg.includes("key") || errMsg.includes("auth")) {
@@ -1190,47 +787,13 @@ openclaw cron add \\
                 }
               },
             },
-            replyOptions: {
-              // 使用 onPartialReply 实现真正的流式消息
-              // 这个回调在 AI 生成过程中被实时调用
-              onPartialReply: supportsStream ? handlePartialReply : undefined,
-              // 禁用 block streaming，因为我们用 onPartialReply 实现更实时的流式
-              disableBlockStreaming: supportsStream,
-            },
+            replyOptions: {},
           });
 
           // 等待分发完成或超时
           try {
             await Promise.race([dispatchPromise, timeoutPromise]);
-            
-            // 清理心跳定时器
-            clearKeepalive();
-            
-            // 分发完成后，如果使用了流式且有内容，发送结束标记
-            if (streamSender && !streamEnded) {
-              // 等待发送锁释放
-              while (sendingLock) {
-                await new Promise(resolve => setTimeout(resolve, 50));
-              }
-              
-              // 确保所有待发送内容都发送出去
-              // 当前段落的最新完整文本
-              const currentSegmentText = pendingFullText && pendingFullText.length > (streamBuffer.length - currentSegmentStart)
-                ? pendingFullText 
-                : streamBuffer.slice(currentSegmentStart);
-              
-              // 计算当前段落剩余未发送的增量内容
-              const remainingIncrement = currentSegmentText.slice(lastSentLength);
-              if (remainingIncrement || streamStarted) {
-                // 有剩余内容或者已开始流式，都需要发送结束标记
-                await streamSender.end(remainingIncrement);
-                streamEnded = true;
-                log?.info(`[qqbot:${account.accountId}] Stream completed, final increment: ${remainingIncrement.length} chars, total streamBuffer: ${streamBuffer.length} chars, chunks: ${streamSender.getContext().index}`);
-              }
-            }
           } catch (err) {
-            // 清理心跳定时器
-            clearKeepalive();
             if (timeoutId) {
               clearTimeout(timeoutId);
             }

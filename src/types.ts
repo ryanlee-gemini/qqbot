@@ -23,8 +23,6 @@ export interface ResolvedQQBotAccount {
   imageServerBaseUrl?: string;
   /** 是否支持 markdown 消息 */
   markdownSupport?: boolean;
-  /** 是否启用流式消息（仅 c2c 私聊支持），默认 true */
-  streamEnabled?: boolean;
   config: QQBotAccountConfig;
 }
 
@@ -45,8 +43,6 @@ export interface QQBotAccountConfig {
   imageServerBaseUrl?: string;
   /** 是否支持 markdown 消息，默认 true */
   markdownSupport?: boolean;
-  /** 是否启用流式消息，默认 true（仅 c2c 私聊支持） */
-  streamEnabled?: boolean;
 }
 
 /**
@@ -124,38 +120,4 @@ export interface WSPayload {
   d?: unknown;
   s?: number;
   t?: string;
-}
-
-/**
- * 流式消息状态
- */
-export enum StreamState {
-  /** 流式消息开始/进行中 */
-  STREAMING = 1,
-  /** 流式消息结束 */
-  END = 10,
-}
-
-/**
- * 流式消息配置
- */
-export interface StreamConfig {
-  /** 流式状态: 1=开始/进行中, 10=结束 */
-  state: StreamState;
-  /** 分片索引，从0开始 */
-  index: number;
-  /** 流式消息ID，第一次发送为空，后续需要带上服务端返回的ID */
-  id: string;
-}
-
-/**
- * 流式消息发送上下文
- */
-export interface StreamContext {
-  /** 当前分片索引 */
-  index: number;
-  /** 流式消息ID（首次发送后由服务端返回） */
-  streamId: string;
-  /** 是否已结束 */
-  ended: boolean;
 }

@@ -63,7 +63,7 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
     return {
       channel: "qqbot" as any,
       configured,
-      statusLines: [`QQ Bot (Stream): ${configured ? "已配置" : "需要 AppID 和 ClientSecret"}`],
+statusLines: [`QQ Bot: ${configured ? "已配置" : "需要 AppID 和 ClientSecret"}`],
       selectionHint: configured ? "已配置" : "支持 QQ 群聊和私聊（流式消息）",
       quickstartScore: configured ? 1 : 20,
     };
@@ -119,7 +119,7 @@ export const qqbotOnboardingAdapter: ChannelOnboardingAdapter = {
           "",
           "此版本支持流式消息发送！",
         ].join("\n"),
-        "QQ Bot (Stream) 配置",
+"QQ Bot 配置",
       );
     }
 
