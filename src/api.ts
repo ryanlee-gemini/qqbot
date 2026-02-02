@@ -13,7 +13,7 @@ let currentMarkdownSupport = false;
  * @param options.markdownSupport - 是否支持 markdown 消息
  */
 export function initApiConfig(options: { markdownSupport?: boolean }): void {
-  currentMarkdownSupport = options.markdownSupport === true; // 默认为 false
+  currentMarkdownSupport = options.markdownSupport !== false; // 默认为 true
 }
 
 /**
