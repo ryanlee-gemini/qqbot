@@ -23,7 +23,7 @@ show_help() {
     echo "  $0 status            查看当前状态"
     echo "  $0                   交互式选择"
     echo ""
-    echo "⚠️  注意: 启用 Markdown 需要在 QQ 开放平台申请 Markdown 消息模板权限"
+    echo "⚠️  注意: 启用 Markdown 需要在 QQ 开放平台申请 Markdown 消息权限"
     echo "         如果没有权限，消息将无法正常发送！"
 }
 
@@ -32,7 +32,7 @@ enable_markdown() {
     openclaw config set qqbot.markdownSupport true
     echo ""
     echo "Markdown 已启用。"
-    echo "⚠️  请确保您已在 QQ 开放平台申请了 Markdown 消息模板权限。"
+    echo "⚠️  请确保您已在 QQ 开放平台申请了 Markdown 消息权限。"
 }
 
 disable_markdown() {
@@ -51,7 +51,7 @@ show_status() {
         if [ "$current" = "true" ]; then
             echo "  状态: ✅ 已启用"
             echo ""
-            echo "  ⚠️  请确保您已在 QQ 开放平台申请了 Markdown 消息模板权限。"
+            echo "  ⚠️  请确保您已在 QQ 开放平台申请了 Markdown 消息权限。"
         elif [ "$current" = "false" ]; then
             echo "  状态: ❌ 已禁用（纯文本模式）"
         else
@@ -74,7 +74,7 @@ interactive_select() {
     echo ""
     echo "是否启用 Markdown 消息格式？"
     echo ""
-    echo "⚠️  注意: 启用 Markdown 需要在 QQ 开放平台申请 Markdown 消息模板权限"
+    echo "⚠️  注意: 启用 Markdown 需要在 QQ 开放平台申请 Markdown 消息权限"
     echo "         如果没有权限，消息将无法正常发送！"
     echo ""
     echo "  1) 启用 Markdown"

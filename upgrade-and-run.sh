@@ -50,7 +50,7 @@ while [[ $# -gt 0 ]]; do
             echo "  QQBOT_SECRET          QQ机器人 Secret"
             echo "  QQBOT_MARKDOWN        是否启用 Markdown（yes/no）"
             echo ""
-            echo "⚠️  注意: 启用 Markdown 需要在 QQ 开放平台申请 Markdown 消息模板权限"
+            echo "⚠️  注意: 启用 Markdown 需要在 QQ 开放平台申请 Markdown 消息权限"
             exit 0
             ;;
         *)
@@ -108,7 +108,7 @@ echo "[4/4] 配置 Markdown 选项..."
 if [ -z "$MARKDOWN" ]; then
     echo ""
     echo "是否启用 Markdown 消息格式？"
-    echo "⚠️  注意: 启用 Markdown 需要在 QQ 开放平台申请 Markdown 消息模板权限"
+    echo "⚠️  注意: 启用 Markdown 需要在 QQ 开放平台申请 Markdown 消息权限"
     echo "         如果没有权限，消息将无法正常发送！"
     echo ""
     read -p "启用 Markdown? (y/N): " md_choice

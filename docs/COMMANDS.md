@@ -79,7 +79,7 @@ openclaw gateway stop
 ### 查看实时日志
 ```bash
 # 跟踪模式（实时刷新）
-openclaw logs -f
+openclaw logs --follow
 
 # 普通查看
 openclaw logs
@@ -88,13 +88,16 @@ openclaw logs
 ### 查看指定行数
 ```bash
 # 查看最近 100 行日志
-openclaw logs -n 100
+openclaw logs --limit 100
 ```
 
-### 按通道筛选日志
+### 其他日志选项
 ```bash
-# 只查看 qqbot 通道的日志
-openclaw logs --channel qqbot
+# JSON 格式输出
+openclaw logs --json
+
+# 纯文本输出（无颜色）
+openclaw logs --plain
 ```
 
 ---
@@ -188,7 +191,7 @@ bash ./scripts/upgrade.sh
 
 ### 查看详细日志
 ```bash
-openclaw logs -f --verbose
+openclaw logs --follow
 ```
 
 ### 检查插件状态
@@ -218,7 +221,7 @@ openclaw channels add --channel qqbot --token "AppID:AppSecret"
 ## ⚠️ 注意事项
 
 1. **不要使用 sudo 运行脚本**：会导致配置文件权限问题
-2. **Markdown 功能需要权限**：启用前需在 QQ 开放平台申请 Markdown 消息模板权限
+2. **Markdown 功能需要权限**：启用前需在 QQ 开放平台申请 Markdown 消息权限
 3. **Token 格式**：格式为 `AppID:AppSecret`，冒号分隔
 
 ---
