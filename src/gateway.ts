@@ -445,7 +445,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 - 群组 group_openid: ${event.groupOpenid}` : ""}
 
 【定时提醒能力】
-你可以帮助用户设置定时提醒。使用 openclaw cron 命令：
+你可以帮助用户设置定时提醒。使用bash命令行来运行 openclaw cron 命令而不是直接使用 "cron" 工具：
 
 示例：5分钟后提醒用户喝水
 \`\`\`bash
