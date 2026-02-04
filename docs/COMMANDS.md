@@ -107,21 +107,21 @@ openclaw logs --plain
 ### 设置配置项
 ```bash
 # 启用 Markdown 消息格式
-openclaw config set qqbot.markdownSupport true
+openclaw config set channels.qqbot.markdownSupport true
 
 # 禁用 Markdown 消息格式
-openclaw config set qqbot.markdownSupport false
+openclaw config set channels.qqbot.markdownSupport false
 ```
 
 ### 获取配置项
 ```bash
 # 查看某个配置项的值
-openclaw config get qqbot.markdownSupport
+openclaw config get channels.qqbot.markdownSupport
 ```
 
 ### 查看所有配置
 ```bash
-openclaw config list
+openclaw config
 ```
 
 ---
