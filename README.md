@@ -21,7 +21,10 @@ QQ 开放平台Bot API 的 Moltbot 渠道插件，支持 C2C 私聊、群聊 @�
 - 支持定时任务到时后主动推送
   <img width="930" height="288" alt="Clipboard_Screenshot_1770112539" src="https://github.com/user-attachments/assets/9674cda0-91e9-4860-8dcc-bc50007862a2" />
 - 优化一些已知问题
-
+- 支持使用npm等方式安装和升级（暂时不支持更低版本）
+  - 安装:`openclaw plugins install @sliverp/qqbot@1.3.7`
+  - 配置：`clawdbot channels add --channel qqbot --token "AppId:AppSecret"`
+  - 热更新：`npx -y @sliverp/qqbot@1.3.7 upgrade`。如果原来配置过AppId和AppSecret，热更新后无需再次配置。注意：npm和Openclaw会占用大量内存，小内存机器不建议使用，小内存机器建议参考下面源码热更新。
 
 ### 1.2.5-2026.02.02
 - 解除URL发送限制，现在可以直接在私聊发送URL
@@ -54,7 +57,10 @@ QQ 开放平台Bot API 的 Moltbot 渠道插件，支持 C2C 私聊、群聊 @�
 
 ## 安装
 
-在插件目录下执行：
+现已发布npm，后续配置流程相同
+`openclaw plugins install @sliverp/qqbot@1.3.7`
+
+或者使用源码来安装，在插件目录下执行：
 
 ```bash
 git clone https://github.com/sliverp/qqbot.git && cd qqbot
@@ -156,7 +162,7 @@ clawdbot onboard
 1. **群消息**：需要在群内 @机器人 才能触发回复
 2. **沙箱模式**：新创建的机器人默认在沙箱模式，需要添加测试用户
 
-## 升级
+## 源码热更新
 
 如果需要升级插件，先运行升级脚本清理旧版本：
 
