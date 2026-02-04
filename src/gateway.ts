@@ -1472,8 +1472,12 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         log?.info(`[qqbot:${account.accountId}] WebSocket closed: ${code} ${reason.toString()}`);
         isConnecting = false; // 释放锁
         
-        // 根据错误码处理
-        // 4009: 可以重新发起 resume
+        // 根据错误码处理（参考 QQ 官方文档）
+        // 4004: CODE_INVALID_TOKEN - Token 无效，需刷新 token 重新连接
+        // 4006: CODE_SESSION_NO_LONGER_VALID - 会话失效，需重新 identify
+        // 4007: CODE_INVALID_SEQ - Resume 时 seq 无效，需重新 identify
+        // 4008: CODE_RATE_LIMITED - 限流断开，等待后重连
+        // 4009: CODE_SESSION_TIMED_OUT - 会话超时，需重新 identify
         // 4900-4913: 内部错误，需要重新 identify
         // 4914: 机器人已下架
         // 4915: 机器人已封禁
@@ -1484,15 +1488,47 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
           return;
         }
         
-        if (code === 4009) {
-          // 4009 可以尝试 resume，保留 session
-          log?.info(`[qqbot:${account.accountId}] Error 4009, will try resume`);
+        // 4004: Token 无效，强制刷新 token 后重连
+        if (code === 4004) {
+          log?.info(`[qqbot:${account.accountId}] Invalid token (4004), will refresh token and reconnect`);
+          shouldRefreshToken = true;
+          cleanup();
+          if (!isAborted) {
+            scheduleReconnect();
+          }
+          return;
+        }
+        
+        // 4008: 限流断开，等待后重连（不需要重新 identify）
+        if (code === 4008) {
+          log?.info(`[qqbot:${account.accountId}] Rate limited (4008), waiting ${RATE_LIMIT_DELAY}ms before reconnect`);
+          cleanup();
+          if (!isAborted) {
+            scheduleReconnect(RATE_LIMIT_DELAY);
+          }
+          return;
+        }
+        
+        // 4006/4007/4009: 会话失效或超时，需要清除 session 重新 identify
+        if (code === 4006 || code === 4007 || code === 4009) {
+          const codeDesc: Record<number, string> = {
+            4006: "session no longer valid",
+            4007: "invalid seq on resume",
+            4009: "session timed out",
+          };
+          log?.info(`[qqbot:${account.accountId}] Error ${code} (${codeDesc[code]}), will re-identify`);
+          sessionId = null;
+          lastSeq = null;
+          // 清除持久化的 Session
+          clearSession(account.accountId);
           shouldRefreshToken = true;
         } else if (code >= 4900 && code <= 4913) {
           // 4900-4913 内部错误，清除 session 重新 identify
           log?.info(`[qqbot:${account.accountId}] Internal error (${code}), will re-identify`);
           sessionId = null;
           lastSeq = null;
+          // 清除持久化的 Session
+          clearSession(account.accountId);
           shouldRefreshToken = true;
         }
         
