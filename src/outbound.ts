@@ -196,10 +196,11 @@ function parseTarget(to: string): { type: "c2c" | "group" | "channel"; id: strin
  * 注意：
  * 1. 主动消息（无 replyToId）必须有消息内容，不支持流式发送
  * 2. 当被动回复不可用（超期或超过次数）时，自动降级为主动消息
+ * 3. 支持 <qqimg>路径</qqimg> 或 <qqimg>路径</img> 格式发送图片
  */
 export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
-  const { to, text, account } = ctx;
-  let { replyToId } = ctx;
+  const { to, account } = ctx;
+  let { text, replyToId } = ctx;
   let fallbackToProactive = false;
 
   console.log("[qqbot] sendText ctx:", JSON.stringify({ to, text: text?.slice(0, 50), replyToId, accountId: account.accountId }, null, 2));
@@ -226,6 +227,141 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
     } else {
       console.log(`[qqbot] sendText: 消息 ${replyToId} 剩余被动回复次数: ${limitCheck.remaining}/${MESSAGE_REPLY_LIMIT}`);
     }
+  }
+
+  // ============ <qqimg> 标签检测与处理 ============
+  // 支持 <qqimg>路径</qqimg> 或 <qqimg>路径</img> 格式发送图片
+  const qqimgRegex = /<qqimg>([^<>]+)<\/(?:qqimg|img)>/gi;
+  const qqimgMatches = text.match(qqimgRegex);
+  
+  if (qqimgMatches && qqimgMatches.length > 0) {
+    console.log(`[qqbot] sendText: Detected ${qqimgMatches.length} <qqimg> tag(s), processing...`);
+    
+    // 构建发送队列：根据内容在原文中的实际位置顺序发送
+    const sendQueue: Array<{ type: "text" | "image"; content: string }> = [];
+    
+    let lastIndex = 0;
+    const qqimgRegexWithIndex = /<qqimg>([^<>]+)<\/(?:qqimg|img)>/gi;
+    let match;
+    
+    while ((match = qqimgRegexWithIndex.exec(text)) !== null) {
+      // 添加标签前的文本
+      const textBefore = text.slice(lastIndex, match.index).replace(/\n{3,}/g, "\n\n").trim();
+      if (textBefore) {
+        sendQueue.push({ type: "text", content: textBefore });
+      }
+      
+      // 添加图片
+      const imagePath = match[1]?.trim();
+      if (imagePath) {
+        sendQueue.push({ type: "image", content: imagePath });
+        console.log(`[qqbot] sendText: Found image path in <qqimg>: ${imagePath}`);
+      }
+      
+      lastIndex = match.index + match[0].length;
+    }
+    
+    // 添加最后一个标签后的文本
+    const textAfter = text.slice(lastIndex).replace(/\n{3,}/g, "\n\n").trim();
+    if (textAfter) {
+      sendQueue.push({ type: "text", content: textAfter });
+    }
+    
+    console.log(`[qqbot] sendText: Send queue: ${sendQueue.map(item => item.type).join(" -> ")}`);
+    
+    // 按顺序发送
+    if (!account.appId || !account.clientSecret) {
+      return { channel: "qqbot", error: "QQBot not configured (missing appId or clientSecret)" };
+    }
+    
+    const accessToken = await getAccessToken(account.appId, account.clientSecret);
+    const target = parseTarget(to);
+    let lastResult: OutboundResult = { channel: "qqbot" };
+    
+    for (const item of sendQueue) {
+      try {
+        if (item.type === "text") {
+          // 发送文本
+          if (replyToId) {
+            // 被动回复
+            if (target.type === "c2c") {
+              const result = await sendC2CMessage(accessToken, target.id, item.content, replyToId);
+              recordMessageReply(replyToId);
+              lastResult = { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
+            } else if (target.type === "group") {
+              const result = await sendGroupMessage(accessToken, target.id, item.content, replyToId);
+              recordMessageReply(replyToId);
+              lastResult = { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
+            } else {
+              const result = await sendChannelMessage(accessToken, target.id, item.content, replyToId);
+              recordMessageReply(replyToId);
+              lastResult = { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
+            }
+          } else {
+            // 主动消息
+            if (target.type === "c2c") {
+              const result = await sendProactiveC2CMessage(accessToken, target.id, item.content);
+              lastResult = { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
+            } else if (target.type === "group") {
+              const result = await sendProactiveGroupMessage(accessToken, target.id, item.content);
+              lastResult = { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
+            } else {
+              const result = await sendChannelMessage(accessToken, target.id, item.content);
+              lastResult = { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
+            }
+          }
+          console.log(`[qqbot] sendText: Sent text part: ${item.content.slice(0, 30)}...`);
+        } else if (item.type === "image") {
+          // 发送图片
+          const imagePath = item.content;
+          const isHttpUrl = imagePath.startsWith("http://") || imagePath.startsWith("https://");
+          
+          let imageUrl = imagePath;
+          
+          // 如果是本地文件路径，读取并转换为 Base64
+          if (!isHttpUrl && !imagePath.startsWith("data:")) {
+            if (fs.existsSync(imagePath)) {
+              const fileBuffer = fs.readFileSync(imagePath);
+              const ext = path.extname(imagePath).toLowerCase();
+              const mimeTypes: Record<string, string> = {
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".png": "image/png",
+                ".gif": "image/gif",
+                ".webp": "image/webp",
+                ".bmp": "image/bmp",
+              };
+              const mimeType = mimeTypes[ext] ?? "image/png";
+              imageUrl = `data:${mimeType};base64,${fileBuffer.toString("base64")}`;
+              console.log(`[qqbot] sendText: Converted local image to Base64 (size: ${fileBuffer.length} bytes)`);
+            } else {
+              console.error(`[qqbot] sendText: Image file not found: ${imagePath}`);
+              continue; // 跳过不存在的图片
+            }
+          }
+          
+          // 发送图片
+          if (target.type === "c2c") {
+            const result = await sendC2CImageMessage(accessToken, target.id, imageUrl, replyToId ?? undefined);
+            lastResult = { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
+          } else if (target.type === "group") {
+            const result = await sendGroupImageMessage(accessToken, target.id, imageUrl, replyToId ?? undefined);
+            lastResult = { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
+          } else if (isHttpUrl) {
+            // 频道使用 Markdown 格式（仅支持公网 URL）
+            const result = await sendChannelMessage(accessToken, target.id, `![](${imagePath})`, replyToId ?? undefined);
+            lastResult = { channel: "qqbot", messageId: result.id, timestamp: result.timestamp };
+          }
+          console.log(`[qqbot] sendText: Sent image via <qqimg> tag: ${imagePath.slice(0, 60)}...`);
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error(`[qqbot] sendText: Failed to send ${item.type}: ${errMsg}`);
+        // 继续发送队列中的其他内容
+      }
+    }
+    
+    return lastResult;
   }
 
   // ============ 主动消息校验（参考 Telegram 机制） ============
