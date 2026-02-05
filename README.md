@@ -109,29 +109,6 @@ clawdbot channels add --channel qqbot --token "AppID:AppSecret"
 
 ---
 
-## 📋 配置项说明
-
-| 配置项 | 类型 | 必填 | 说明 |
-|--------|------|------|------|
-| `appId` | string | ✅ | QQ 机器人 AppID |
-| `clientSecret` | string | ✅* | AppSecret，与 `clientSecretFile` 二选一 |
-| `clientSecretFile` | string | ✅* | AppSecret 文件路径 |
-| `enabled` | boolean | ❌ | 是否启用，默认 `true` |
-| `name` | string | ❌ | 账户显示名称 |
-| `systemPrompt` | string | ❌ | 自定义系统提示词 |
-
----
-
-## 📨 支持的消息类型
-
-| 事件类型 | 说明 | Intent |
-|----------|------|--------|
-| `C2C_MESSAGE_CREATE` | C2C 单聊消息 | `1 << 25` |
-| `GROUP_AT_MESSAGE_CREATE` | 群聊 @机器人消息 | `1 << 25` |
-| `AT_MESSAGE_CREATE` | 频道 @机器人消息 | `1 << 30` |
-| `DIRECT_MESSAGE_CREATE` | 频道私信 | `1 << 12` |
-
----
 
 ## 🚀 使用
 
