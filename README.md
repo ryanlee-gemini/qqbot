@@ -169,7 +169,7 @@ clawdbot onboard
 npx -y @sliverp/qqbot@1.3.7 upgrade
 ```
 
-> 热更新后无需重新配置 AppId 和 AppSecret
+> 热更新后无需重新配置 AppId 和 AppSecret。该方式Openclaw和Node.js会占用大量内存，小内存机器优先建议使用源码方式热更新
 
 ### 源码热更新
 
@@ -191,7 +191,6 @@ clawdbot gateway restart
 
 升级脚本会自动清理旧版本和配置。
 
----
 
 
 
