@@ -535,6 +535,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         
         // AI 可见的完整上下文（简洁的动态信息 + 用户消息）
         // 静态能力说明已通过 skills 加载，这里只提供必要的运行时上下文
+        // 📌 关键：直接注入图片发送说明，确保 AI 知道如何发送图片
         const contextInfo = `你正在通过 QQ 与用户对话。
 
 【本次会话上下文】
@@ -542,6 +543,11 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 - 场景: ${isGroupChat ? "群聊" : "私聊"}${isGroupChat ? ` (群组: ${event.groupOpenid})` : ""}
 - 消息ID: ${event.messageId}
 - 投递目标: ${targetAddress}
+
+【发送图片方法】
+你可以发送本地图片！使用 <qqimg>图片路径</qqimg> 标签即可，例如：
+<qqimg>/Users/xxx/image.png</qqimg>
+绝对不要说"无法发送图片"，直接用 <qqimg> 标签包裹路径就能发送。
 
 你已加载 qqbot 相关技能，可直接使用定时提醒（qqbot-cron）和图片发送（qqbot-media）等功能。`;
 
