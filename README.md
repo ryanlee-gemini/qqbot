@@ -60,7 +60,7 @@ QQ 开放平台 Bot API 的 Openclaw 渠道插件，支持 C2C 私聊、群聊 @
 ### 方式二：npm 安装（推荐）
 
 ```bash
-openclaw plugins install @sliverp/qqbot@1.3.7
+openclaw plugins install @sliverp/qqbot@latest
 ```
 
 ### 方式三：源码安装
@@ -150,7 +150,7 @@ clawdbot onboard
 ### npm 热更新
 
 ```bash
-npx -y @sliverp/qqbot@1.3.7 upgrade
+npx -y @sliverp/qqbot@latest upgrade
 ```
 
 > 热更新后无需重新配置 AppId 和 AppSecret。该方式Openclaw和Node.js会占用大量内存，小内存机器优先建议使用源码方式热更新
