@@ -3,8 +3,7 @@ QQ 是一款覆盖广泛用户群体的即时通讯平台，提供文字、语�
 
 该接入方式可将 OpenClaw 与 QQ Bot 进行连接，通过平台的长连接事件订阅机制接收消息与事件回调，从而在不对外暴露公网 Webhook 地址的情况下实现稳定、安全的消息收发与自动化能力集成。
 
-# QQ Bot插件安装
-安装 QQ Bot插件:
+# 步骤1:安装QQ Bot插件
 
 OpenClaw plugins命令安装
 
@@ -17,8 +16,8 @@ git clone https://github.com/sliverp/qqbot.git && cd qqbot
 clawdbot plugins install .
 ```
 
-
-# 注册QQ开放平台
+# 步骤2:创建QQ Bot
+## 1.注册QQ开放平台
 前往腾讯QQ开放平台官网，默认无法使用您的QQ账号直接登录，需要新注册QQ开放平台账号。
 <img width="2140" height="1004" alt="1" src="https://github.com/user-attachments/assets/d76a780c-5040-43fb-ac41-5808f975ae4b" />
 
@@ -36,7 +35,7 @@ clawdbot plugins install .
 人脸识别审核通过后，即可登录进入QQ开放平台。
 <img width="2356" height="1308" alt="5" src="https://github.com/user-attachments/assets/c1875b27-fefc-4a1c-81ef-863da8b15ec6" />
 
-# 创建一个QQBot机器人
+## 2.创建一个QQBot机器人
 在QQ开放平台的QQ机器人页面，可以创建机器人。
 <img width="2334" height="1274" alt="6" src="https://github.com/user-attachments/assets/8389c38d-6662-46d0-ae04-92af374b61ef" />
 <img width="2316" height="1258" alt="7" src="https://github.com/user-attachments/assets/15cfe57a-0404-4b02-85fe-42a22cf96d01" />
@@ -50,7 +49,7 @@ QQ机器人创建完成之后，可选择机器人点击进入管理页面。
 <img width="2970" height="1562" alt="9" src="https://github.com/user-attachments/assets/c7fc3094-2840-4780-a202-47b2c2b74e50" />
 <img width="1258" height="594" alt="10" src="https://github.com/user-attachments/assets/4445bede-e7d5-4927-9821-039e7ad8f1f5" />
 
-# 沙箱配置
+## 3.沙箱配置
 在QQ机器人的“开发管理”页面，在“沙箱配置”中，设置单独聊天（选择“在消息列表配置”）。
 
 您可以按照自己的使用场景进行配置，也可以完成后续步骤之后再回到本步骤进行操作。
@@ -75,3 +74,6 @@ QQ开放平台不支持机器人的“在QQ群配置”操作，只支持单独�
 <img width="3006" height="1504" alt="15" src="https://github.com/user-attachments/assets/cecef3a6-0596-4da0-8b92-8d67b8f3cdca" />
 <img width="2902" height="1394" alt="16" src="https://github.com/user-attachments/assets/eb98ffce-490f-402c-8b0c-af7ede1b1303" />
 <img width="1306" height="672" alt="17" src="https://github.com/user-attachments/assets/799056e3-82a6-44bc-9e3d-9c840faafa41" />
+
+# 步骤3:配置OpenClaw
+
