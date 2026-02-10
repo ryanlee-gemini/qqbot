@@ -2,11 +2,14 @@
 
 # QQBot Markdown 配置脚本
 # 用于单独设置是否启用 Markdown 消息格式
+# 直接编辑 JSON 配置文件，避免框架验证拒绝未注册的 channel
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
+
+OPENCLAW_CONFIG="$HOME/.openclaw/openclaw.json"
 
 show_help() {
     echo "用法: $0 [选项]"
@@ -27,9 +30,26 @@ show_help() {
     echo "         如果没有权限，消息将无法正常发送！"
 }
 
+set_markdown_value() {
+    local value="$1"
+    if [ ! -f "$OPENCLAW_CONFIG" ]; then
+        echo "  错误: 配置文件不存在: $OPENCLAW_CONFIG"
+        echo "  请先运行 openclaw onboard 初始化配置"
+        exit 1
+    fi
+    node -e "
+      const fs = require('fs');
+      const cfg = JSON.parse(fs.readFileSync('$OPENCLAW_CONFIG', 'utf-8'));
+      if (!cfg.channels) cfg.channels = {};
+      if (!cfg.channels.qqbot) cfg.channels.qqbot = {};
+      cfg.channels.qqbot.markdownSupport = $value;
+      fs.writeFileSync('$OPENCLAW_CONFIG', JSON.stringify(cfg, null, 4) + '\n');
+    "
+}
+
 enable_markdown() {
     echo "✅ 启用 Markdown 消息格式..."
-    openclaw config set qqbot.markdownSupport true
+    set_markdown_value true
     echo ""
     echo "Markdown 已启用。"
     echo "⚠️  请确保您已在 QQ 开放平台申请了 Markdown 消息权限。"
@@ -37,7 +57,7 @@ enable_markdown() {
 
 disable_markdown() {
     echo "❌ 禁用 Markdown 消息格式（使用纯文本）..."
-    openclaw config set qqbot.markdownSupport false
+    set_markdown_value false
     echo ""
     echo "Markdown 已禁用，将使用纯文本格式发送消息。"
 }
@@ -45,9 +65,11 @@ disable_markdown() {
 show_status() {
     echo "当前 Markdown 配置状态:"
     echo ""
-    # 尝试获取当前配置
-    if command -v openclaw &> /dev/null; then
-        current=$(openclaw config get qqbot.markdownSupport 2>/dev/null || echo "未设置")
+    if [ -f "$OPENCLAW_CONFIG" ]; then
+        current=$(node -e "
+          const cfg = JSON.parse(require('fs').readFileSync('$OPENCLAW_CONFIG', 'utf-8'));
+          console.log(cfg.channels?.qqbot?.markdownSupport ?? '未设置');
+        " 2>/dev/null || echo "未设置")
         if [ "$current" = "true" ]; then
             echo "  状态: ✅ 已启用"
             echo ""
@@ -58,7 +80,7 @@ show_status() {
             echo "  状态: 未设置（默认: 禁用）"
         fi
     else
-        echo "  错误: openclaw 命令不可用"
+        echo "  错误: 配置文件不存在: $OPENCLAW_CONFIG"
         exit 1
     fi
 }

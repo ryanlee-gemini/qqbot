@@ -101,7 +101,7 @@ echo "安装日志文件: $INSTALL_LOG"
 echo "详细信息将记录到日志文件中..."
 
 # 尝试安装并捕获详细输出
-if ! openclaw plugins install . --verbose 2>&1 | tee "$INSTALL_LOG"; then
+if ! openclaw plugins install . 2>&1 | tee "$INSTALL_LOG"; then
     echo ""
     echo "❌ 插件安装失败！"
     echo "========================================="
@@ -215,22 +215,30 @@ fi
 
 # 设置 markdown 配置
 if [ "$MARKDOWN" = "yes" ] || [ "$MARKDOWN" = "y" ] || [ "$MARKDOWN" = "true" ]; then
+    MARKDOWN_VALUE="true"
     echo "启用 Markdown 消息格式..."
-    if ! openclaw config set qqbot.markdownSupport true 2>&1; then
-        echo "⚠️  警告: Markdown配置设置失败"
-        echo "注意: 这不会影响脚本继续执行，但可能影响消息格式"
-        echo "您可以稍后手动配置: openclaw config set qqbot.markdownSupport true"
-    else
-        echo "✅ Markdown配置成功"
-    fi
 else
+    MARKDOWN_VALUE="false"
     echo "禁用 Markdown 消息格式（使用纯文本）..."
-    if ! openclaw config set qqbot.markdownSupport false 2>&1; then
-        echo "⚠️  警告: Markdown配置设置失败"
-        echo "注意: 这不会影响脚本继续执行"
-        echo "您可以稍后手动配置: openclaw config set qqbot.markdownSupport false"
+fi
+
+# 优先使用 openclaw config set，失败时回退到直接编辑 JSON
+if openclaw config set channels.qqbot.markdownSupport "$MARKDOWN_VALUE" 2>&1; then
+    echo "✅ Markdown配置成功"
+else
+    echo "⚠️  openclaw config set 失败，尝试直接编辑配置文件..."
+    OPENCLAW_CONFIG="$HOME/.openclaw/openclaw.json"
+    if [ -f "$OPENCLAW_CONFIG" ] && node -e "
+      const fs = require('fs');
+      const cfg = JSON.parse(fs.readFileSync('$OPENCLAW_CONFIG', 'utf-8'));
+      if (!cfg.channels) cfg.channels = {};
+      if (!cfg.channels.qqbot) cfg.channels.qqbot = {};
+      cfg.channels.qqbot.markdownSupport = $MARKDOWN_VALUE;
+      fs.writeFileSync('$OPENCLAW_CONFIG', JSON.stringify(cfg, null, 4) + '\n');
+    " 2>&1; then
+        echo "✅ Markdown配置成功（直接编辑配置文件）"
     else
-        echo "✅ Markdown配置成功"
+        echo "⚠️  Markdown配置设置失败，不影响后续运行"
     fi
 fi
 
@@ -278,7 +286,7 @@ GATEWAY_LOG="/tmp/openclaw-gateway-$(date +%s).log"
 echo "网关日志: $GATEWAY_LOG"
 
 set +e  # 临时禁用严格错误检查，让用户可以Ctrl+C停止
-openclaw gateway --verbose 2>&1 | tee "$GATEWAY_LOG"
+openclaw gateway --verbose 2>&1 | grep --line-buffered -v '\[ws\] → event \(health\|tick\)' | tee "$GATEWAY_LOG"
 EXIT_CODE=$?
 set -e  # 重新启用严格错误检查
 

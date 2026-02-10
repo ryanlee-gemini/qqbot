@@ -53,7 +53,7 @@ const QUICK_DISCONNECT_THRESHOLD = 5000; // 5秒内断开视为快速断开
 // 图床服务器配置（可通过环境变量覆盖）
 const IMAGE_SERVER_PORT = parseInt(process.env.QQBOT_IMAGE_SERVER_PORT || "18765", 10);
 // 使用绝对路径，确保文件保存和读取使用同一目录
-const IMAGE_SERVER_DIR = process.env.QQBOT_IMAGE_SERVER_DIR || path.join(process.env.HOME || "/home/ubuntu", "clawd", "qqbot-images");
+const IMAGE_SERVER_DIR = process.env.QQBOT_IMAGE_SERVER_DIR || path.join(process.env.HOME || "/home/ubuntu", ".openclaw", "qqbot", "images");
 
 // 消息队列配置（异步处理，防止阻塞心跳）
 const MESSAGE_QUEUE_SIZE = 1000; // 最大队列长度
@@ -379,6 +379,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
       }
       
       const accessToken = await getAccessToken(account.appId, account.clientSecret);
+      log?.info(`[qqbot:${account.accountId}] ✅ Access token obtained successfully`);
       const gatewayUrl = await getGatewayUrl(accessToken);
 
       log?.info(`[qqbot:${account.accountId}] Connecting to ${gatewayUrl}`);
@@ -446,8 +447,8 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         // 处理附件（图片等）- 下载到本地供 clawdbot 访问
         let attachmentInfo = "";
         const imageUrls: string[] = [];
-        // 存到 clawdbot 工作目录下的 downloads 文件夹
-        const downloadDir = path.join(process.env.HOME || "/home/ubuntu", "clawd", "downloads");
+        // 存到 .openclaw/qqbot 目录下的 downloads 文件夹
+        const downloadDir = path.join(process.env.HOME || "/home/ubuntu", ".openclaw", "qqbot", "downloads");
         
         if (event.attachments?.length) {
           // ============ 接收图片的自然语言描述生成 ============
