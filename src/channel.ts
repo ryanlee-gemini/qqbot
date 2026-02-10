@@ -173,6 +173,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
       });
     },
   },
+
   outbound: {
     deliveryMode: "direct",
     chunker: chunkText,
