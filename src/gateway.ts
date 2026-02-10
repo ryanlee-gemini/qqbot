@@ -9,6 +9,7 @@ import { getQQBotRuntime } from "./runtime.js";
 import { startImageServer, isImageServerRunning, downloadFile, type ImageServerConfig } from "./image-server.js";
 import { getImageSize, formatQQBotMarkdownImage, hasQQBotImageSize, DEFAULT_IMAGE_SIZE } from "./utils/image-size.js";
 import { parseQQBotPayload, encodePayloadForCron, isCronReminderPayload, isMediaPayload, type CronReminderPayload, type MediaPayload } from "./utils/payload.js";
+import { convertSilkToWav, isVoiceAttachment, formatDuration } from "./utils/audio-convert.js";
 
 // QQ Bot intents - 按权限级别分组
 const INTENTS = {
@@ -122,6 +123,29 @@ function recordMessageReply(messageId: string): void {
       record.count++;
     }
   }
+}
+
+// ============ QQ 表情标签解析 ============
+
+/**
+ * 解析 QQ 表情标签，将 <faceType=1,faceId="13",ext="base64..."> 格式
+ * 替换为 【表情: 中文名】 格式
+ * ext 字段为 Base64 编码的 JSON，格式如 {"text":"呲牙"}
+ */
+function parseFaceTags(text: string): string {
+  if (!text) return text;
+
+  // 匹配 <faceType=...,faceId="...",ext="..."> 格式的表情标签
+  return text.replace(/<faceType=\d+,faceId="[^"]*",ext="([^"]*)">/g, (_match, ext: string) => {
+    try {
+      const decoded = Buffer.from(ext, "base64").toString("utf-8");
+      const parsed = JSON.parse(decoded);
+      const faceName = parsed.text || "未知表情";
+      return `【表情: ${faceName}】`;
+    } catch {
+      return _match;
+    }
+  });
 }
 
 // ============ 内部标记过滤 ============
@@ -401,6 +425,8 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         groupOpenid?: string;
         attachments?: Array<{ content_type: string; url: string; filename?: string }>;
       }) => {
+
+        log?.debug?.(`[qqbot:${account.accountId}] Received message: ${JSON.stringify(event)}`);
         log?.info(`[qqbot:${account.accountId}] Processing message from ${event.senderId}: ${event.content}`);
         if (event.attachments?.length) {
           log?.info(`[qqbot:${account.accountId}] Attachments: ${event.attachments.length}`);
@@ -514,9 +540,9 @@ openclaw cron add \\
         const downloadDir = path.join(process.env.HOME || "/home/ubuntu", "clawd", "downloads");
         
         if (event.attachments?.length) {
-          // ============ 接收图片的自然语言描述生成 ============
-          // 根据需求 4：将图片信息转换为自然语言描述，便于 AI 理解
+          // ============ 接收附件描述生成（图片 / 语音 / 其他） ============
           const imageDescriptions: string[] = [];
+          const voiceDescriptions: string[] = [];
           const otherAttachments: string[] = [];
           
           for (const att of event.attachments) {
@@ -538,6 +564,42 @@ openclaw cron add \\
 - 发送时间：${timestamp}
 
 请根据图片内容进行回复。`);
+              } else if (isVoiceAttachment(att)) {
+                // ============ 语音消息处理：SILK → WAV ============
+                log?.info(`[qqbot:${account.accountId}] Voice attachment detected: ${att.filename}, converting SILK to WAV...`);
+                try {
+                  const result = await convertSilkToWav(localPath, downloadDir);
+                  if (result) {
+                    const durationStr = formatDuration(result.duration);
+                    log?.info(`[qqbot:${account.accountId}] Voice converted: ${result.wavPath} (duration: ${durationStr})`);
+                    
+                    const timestamp = new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" });
+                    voiceDescriptions.push(`
+用户发送了一条语音消息：
+- 语音文件：${result.wavPath}
+- 语音时长：${durationStr}
+- 发送时间：${timestamp}`);
+                  } else {
+                    // SILK 解码失败，保留原始文件
+                    log?.info(`[qqbot:${account.accountId}] Voice file is not SILK format, keeping original: ${localPath}`);
+                    voiceDescriptions.push(`
+用户发送了一条语音消息（非SILK格式，无法转换）：
+- 语音文件：${localPath}
+- 原始格式：${att.filename || "unknown"}
+- 消息ID：${event.messageId}
+
+请告知用户该语音格式暂不支持解析。`);
+                  }
+                } catch (convertErr) {
+                  log?.error(`[qqbot:${account.accountId}] Voice conversion failed: ${convertErr}`);
+                  voiceDescriptions.push(`
+用户发送了一条语音消息（转换失败）：
+- 原始文件：${localPath}
+- 错误信息：${convertErr}
+- 消息ID：${event.messageId}
+
+请告知用户语音处理出现问题。`);
+                }
               } else {
                 otherAttachments.push(`[附件: ${localPath}]`);
               }
@@ -566,16 +628,21 @@ openclaw cron add \\
             }
           }
           
-          // 组合附件信息：先图片描述，后其他附件
+          // 组合附件信息：先图片描述，后语音描述，后其他附件
           if (imageDescriptions.length > 0) {
             attachmentInfo += "\n" + imageDescriptions.join("\n");
+          }
+          if (voiceDescriptions.length > 0) {
+            attachmentInfo += "\n" + voiceDescriptions.join("\n");
           }
           if (otherAttachments.length > 0) {
             attachmentInfo += "\n" + otherAttachments.join("\n");
           }
         }
         
-        const userContent = event.content + attachmentInfo;
+        // 解析 QQ 表情标签，将 <faceType=...,ext="base64"> 替换为 【表情: 中文名】
+        const parsedContent = parseFaceTags(event.content);
+        const userContent = parsedContent + attachmentInfo;
         let messageBody = `【系统提示】\n${systemPrompts.join("\n")}\n\n【用户输入】\n${userContent}`;
 
         if(userContent.startsWith("/")){ // 保留Openclaw原始命令
