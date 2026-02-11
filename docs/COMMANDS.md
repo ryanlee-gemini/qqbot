@@ -15,10 +15,13 @@ openclaw plugins install .
 openclaw plugins install /path/to/plugin
 ```
 
-### 卸载插件
+### 禁用/启用插件
 ```bash
-# 卸载指定插件
-openclaw plugins uninstall qqbot
+# 禁用指定插件
+openclaw plugins disable qqbot
+
+# 启用指定插件
+openclaw plugins enable qqbot
 ```
 
 ### 查看已安装插件
@@ -30,18 +33,20 @@ openclaw plugins list
 
 ## 📺 通道管理
 
-### 添加通道
+### 配置 QQBot 通道
 ```bash
-# 添加 QQBot 通道
-openclaw channels add --channel qqbot --token "AppID:AppSecret"
-
-# 示例
-openclaw channels add --channel qqbot --token "123456789:your_secret_here"
+# QQBot 是自定义插件，通过 config set 配置（不是 channels add）
+openclaw config set channels.qqbot.appId "你的AppID"
+openclaw config set channels.qqbot.clientSecret "你的AppSecret"
+openclaw config set channels.qqbot.enabled true
 ```
 
-### 删除通道
+> **注意**：`openclaw channels add --channel` 仅支持内置通道（telegram、discord 等）。
+> QQBot 作为自定义插件，需通过 `config set` 或直接编辑 `~/.openclaw/openclaw.json` 配置。
+
+### 禁用通道
 ```bash
-openclaw channels remove --channel qqbot
+openclaw config set channels.qqbot.enabled false
 ```
 
 ### 查看通道列表
@@ -213,7 +218,9 @@ bash ./scripts/upgrade.sh
 openclaw plugins install .
 
 # 3. 重新配置通道
-openclaw channels add --channel qqbot --token "AppID:AppSecret"
+openclaw config set channels.qqbot.appId "你的AppID"
+openclaw config set channels.qqbot.clientSecret "你的AppSecret"
+openclaw config set channels.qqbot.enabled true
 ```
 
 ---
@@ -222,7 +229,6 @@ openclaw channels add --channel qqbot --token "AppID:AppSecret"
 
 1. **不要使用 sudo 运行脚本**：会导致配置文件权限问题
 2. **Markdown 功能需要权限**：启用前需在 QQ 开放平台申请 Markdown 消息权限
-3. **Token 格式**：格式为 `AppID:AppSecret`，冒号分隔
 
 ---
 
