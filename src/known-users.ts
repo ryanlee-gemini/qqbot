@@ -75,7 +75,7 @@ function loadUsersFromFile(): Map<string, KnownUser> {
         usersCache.set(key, user);
       }
       
-      console.log(`[known-users] Loaded ${usersCache.size} users from file`);
+      console.log(`[known-users] Loaded ${usersCache.size} users`);
     }
   } catch (err) {
     console.error(`[known-users] Failed to load users: ${err}`);
@@ -112,7 +112,6 @@ function doSaveUsersToFile(): void {
     const users = Array.from(usersCache.values());
     fs.writeFileSync(KNOWN_USERS_FILE, JSON.stringify(users, null, 2), "utf-8");
     isDirty = false;
-    console.log(`[known-users] Saved ${users.length} users to file`);
   } catch (err) {
     console.error(`[known-users] Failed to save users: ${err}`);
   }
@@ -164,7 +163,6 @@ export function recordKnownUser(user: {
     if (user.nickname && user.nickname !== existing.nickname) {
       existing.nickname = user.nickname;
     }
-    console.log(`[known-users] Updated user ${user.openid}, interactions: ${existing.interactionCount}`);
   } else {
     // 新用户
     const newUser: KnownUser = {
@@ -178,7 +176,7 @@ export function recordKnownUser(user: {
       interactionCount: 1,
     };
     cache.set(key, newUser);
-    console.log(`[known-users] New user recorded: ${user.openid} (${user.type})`);
+    console.log(`[known-users] New user: ${user.openid} (${user.type})`);
   }
   
   isDirty = true;
