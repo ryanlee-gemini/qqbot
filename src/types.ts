@@ -68,9 +68,8 @@ export interface AudioFormatPolicy {
   sttDirectFormats?: string[];
   /**
    * QQ 平台支持直传的音频格式（出站：跳过→SILK 转换）
-   * 当 QQ 平台支持更多音频格式上传时，可将其加入此列表
-   * 例如: [".mp3", ".wav", ".ogg"]
-   * 默认为空（所有格式都转换为 SILK 后上传）
+   * 默认为 [".wav", ".mp3", ".silk"]（QQ Bot API 原生支持的三种格式）
+   * 仅当需要覆盖默认值时才配置此项
    */
   uploadDirectFormats?: string[];
 }
@@ -85,6 +84,7 @@ export interface MessageAttachment {
   width?: number;
   size?: number;
   url: string;
+  voice_wav_url?: string;  // QQ 提供的 WAV 格式语音直链，有值时优先使用以避免 SILK→WAV 转换
 }
 
 /**

@@ -99,6 +99,67 @@ openclaw channels add --channel qqbot --token "AppID:AppSecret"
 }
 ```
 
+## 语音能力配置（可选）
+
+### STT（语音转文字）— 自动转录用户发来的语音消息
+
+STT 复用已有的模型 provider 配置，在 `tools.media.audio.models` 中添加音频模型条目：
+
+``` json
+{
+  "tools": {
+    "media": {
+      "audio": {
+        "models": [
+          {
+            "provider": "openai",
+            "model": "whisper-1"
+          }
+        ]
+      }
+    }
+  },
+  "models": {
+    "providers": {
+      "openai": {
+        "baseUrl": "https://api.openai.com/v1",
+        "apiKey": "sk-xxx"
+      }
+    }
+  }
+}
+```
+
+- `provider` — 引用 `models.providers` 中的 key，继承 `baseUrl` 和 `apiKey`（默认：`"openai"`）
+- `model` — STT 模型名称（默认：`"whisper-1"`）
+- 也可在音频模型条目中直接设置 `baseUrl` / `apiKey` 来覆盖 provider 默认值
+- 配置后，用户发来的语音消息会自动转换（SILK→WAV）并转录为文字
+
+### TTS（文字转语音）— 机器人发送语音消息
+
+在 `channels.qqbot.tts` 下配置 TTS：
+
+``` json
+{
+  "channels": {
+    "qqbot": {
+      "tts": {
+        "provider": "openai",
+        "model": "tts-1",
+        "voice": "alloy"
+      }
+    }
+  }
+}
+```
+
+- `provider` — 引用 `models.providers` 中的 key，继承 `baseUrl` 和 `apiKey`（默认：`"openai"`）
+- `model` — TTS 模型名称（默认：`"tts-1"`）
+- `voice` — 语音音色（默认：`"alloy"`）
+- `baseUrl` / `apiKey` — 可选，覆盖 provider 默认值
+- `enabled` — 设为 `false` 可禁用（默认：`true`）
+- 配置后，AI 可使用 `<qqvoice>` 标签通过 OpenAI 兼容 TTS API 生成并发送语音消息
+
 # 步骤4：启动与测试
 
 ## 1.启动gateway

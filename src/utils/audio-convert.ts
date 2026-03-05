@@ -305,7 +305,7 @@ export async function convertSilkToWav(
 export function isVoiceAttachment(att: { content_type?: string; filename?: string }): boolean {
   if (att.content_type === "voice" || att.content_type?.startsWith("audio/")) return true;
   const ext = att.filename ? path.extname(att.filename).toLowerCase() : "";
-  return [".amr", ".silk", ".slk"].includes(ext);
+  return [".amr", ".silk", ".slk", ".slac"].includes(ext);
 }
 
 export function formatDuration(durationMs: number): string {
@@ -332,19 +332,37 @@ export interface TTSConfig {
 
 export function resolveTTSConfig(cfg: Record<string, unknown>): TTSConfig | null {
   const c = cfg as any;
-  const ttsCfg = c?.channels?.qqbot?.tts;
-  if (!ttsCfg || ttsCfg.enabled === false) return null;
 
-  const providerId: string = ttsCfg?.provider || "openai";
-  const providerCfg = c?.models?.providers?.[providerId];
+  // 优先使用 channels.qqbot.tts（插件专属配置）
+  const channelTts = c?.channels?.qqbot?.tts;
+  if (channelTts && channelTts.enabled !== false) {
+    const providerId: string = channelTts?.provider || "openai";
+    const providerCfg = c?.models?.providers?.[providerId];
+    const baseUrl: string | undefined = channelTts?.baseUrl || providerCfg?.baseUrl;
+    const apiKey: string | undefined = channelTts?.apiKey || providerCfg?.apiKey;
+    const model: string = channelTts?.model || "tts-1";
+    const voice: string = channelTts?.voice || "alloy";
+    if (baseUrl && apiKey) {
+      return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey, model, voice };
+    }
+  }
 
-  const baseUrl: string | undefined = ttsCfg?.baseUrl || providerCfg?.baseUrl;
-  const apiKey: string | undefined = ttsCfg?.apiKey || providerCfg?.apiKey;
-  const model: string = ttsCfg?.model || "tts-1";
-  const voice: string = ttsCfg?.voice || "alloy";
+  // 回退到 messages.tts（openclaw 框架级 TTS 配置）
+  const msgTts = c?.messages?.tts;
+  if (msgTts && msgTts.auto !== "disabled") {
+    const providerId: string = msgTts?.provider || "openai";
+    const providerBlock = msgTts?.[providerId];  // messages.tts.openai / messages.tts.xxx
+    const providerCfg = c?.models?.providers?.[providerId];
+    const baseUrl: string | undefined = providerBlock?.baseUrl || providerCfg?.baseUrl;
+    const apiKey: string | undefined = providerBlock?.apiKey || providerCfg?.apiKey;
+    const model: string = providerBlock?.model || "tts-1";
+    const voice: string = providerBlock?.voice || "alloy";
+    if (baseUrl && apiKey) {
+      return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey, model, voice };
+    }
+  }
 
-  if (!baseUrl || !apiKey) return null;
-  return { baseUrl: baseUrl.replace(/\/+$/, ""), apiKey, model, voice };
+  return null;
 }
 
 export async function textToSpeechPCM(
@@ -407,18 +425,21 @@ export async function textToSilk(
 
 // ============ 核心：任意音频 → SILK Base64 ============
 
+/** QQ Bot API 原生支持上传的音频格式（无需转换为 SILK） */
+const QQ_NATIVE_UPLOAD_FORMATS = [".wav", ".mp3", ".silk"];
+
 /**
- * 将本地音频文件转换为 SILK 格式的 Base64（用于 QQ Bot 语音上传）
+ * 将本地音频文件转换为 QQ Bot 可上传的 Base64
  *
+ * QQ Bot API 支持直传 WAV、MP3、SILK 三种格式，其他格式仍需转换。
  * 转换策略（参考 NapCat/go-cqhttp/Discord/Telegram 的做法）：
  *
- * 1. SILK 格式 → 直接使用
+ * 1. WAV / MP3 / SILK → 直传（跳过转换）
  * 2. 有 ffmpeg → ffmpeg 万能解码为 PCM → silk-wasm 编码
- *    支持: mp3, ogg, opus, aac, flac, wav, wma, m4a, pcm 等所有 ffmpeg 支持的格式
- * 3. 无 ffmpeg → WASM fallback（仅支持 mp3, wav, pcm）
- */
-/**
- * @param directUploadFormats - 可直接上传的音频格式列表（跳过 SILK 转换），如 [".mp3", ".wav"]
+ *    支持: ogg, opus, aac, flac, wma, m4a, pcm 等所有 ffmpeg 支持的格式
+ * 3. 无 ffmpeg → WASM fallback（仅支持 pcm, wav）
+ *
+ * @param directUploadFormats - 自定义直传格式列表，覆盖默认值。传 undefined 使用 QQ_NATIVE_UPLOAD_FORMATS
  */
 export async function audioFileToSilkBase64(filePath: string, directUploadFormats?: string[]): Promise<string | null> {
   if (!fs.existsSync(filePath)) return null;
@@ -431,15 +452,15 @@ export async function audioFileToSilkBase64(filePath: string, directUploadFormat
 
   const ext = path.extname(filePath).toLowerCase();
 
-  // 0. 如果当前格式在直传列表中，跳过 SILK 转换，直接返回原始 Base64
-  const normalized = normalizeFormats(directUploadFormats);
-  if (normalized.includes(ext)) {
-    console.log(`[audio-convert] direct upload (skip SILK conversion): ${ext} (${buf.length} bytes)`);
+  // 0. 直传判断：QQ Bot API 原生支持 WAV/MP3/SILK，可通过配置覆盖
+  const uploadFormats = directUploadFormats ? normalizeFormats(directUploadFormats) : QQ_NATIVE_UPLOAD_FORMATS;
+  if (uploadFormats.includes(ext)) {
+    console.log(`[audio-convert] direct upload (QQ native format): ${ext} (${buf.length} bytes)`);
     return buf.toString("base64");
   }
 
-  // 1. SILK 格式文件直接使用（无需转换）
-  if ([".silk", ".slk", ".amr"].includes(ext)) {
+  // 1. .slk / .amr 扩展名 → 检测 SILK 魔数，是 SILK 则直传
+  if ([".slk", ".slac"].includes(ext)) {
     const stripped = stripAmrHeader(buf);
     const raw = new Uint8Array(stripped.buffer, stripped.byteOffset, stripped.byteLength);
     if (isSilk(raw)) {
