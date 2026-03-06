@@ -144,33 +144,22 @@ export function getTokenStatus(): { status: "valid" | "expired" | "refreshing" |
 }
 
 /**
- * msg_seq 追踪器 - 用于对同一条消息的多次回复
- * key: msg_id, value: 当前 seq 值
- * 使用时间戳作为基础值，确保进程重启后不会重复
+ * msg_seq 全局递增计数器
+ * QQ 服务端要求同一个发送目标（用户/群）内 msg_seq 唯一
+ * 使用时间戳作为基础值 + 全局递增，确保：
+ * 1. 进程重启后不会与之前的 seq 重复
+ * 2. 不同 msg_id 的回复也不会产生相同的 seq
  */
-const msgSeqTracker = new Map<string, number>();
 const seqBaseTime = Math.floor(Date.now() / 1000) % 100000000; // 取秒级时间戳的后8位作为基础
+let globalSeqCounter = 0;
 
 /**
- * 获取并递增消息序号
- * 返回的 seq 会基于时间戳，避免进程重启后重复
+ * 获取并递增消息序号（全局唯一）
+ * @param _msgId - 保留参数，不再用于分桶计数
  */
-export function getNextMsgSeq(msgId: string): number {
-  const current = msgSeqTracker.get(msgId) ?? 0;
-  const next = current + 1;
-  msgSeqTracker.set(msgId, next);
-  
-  // 清理过期的序号
-  // 简单策略：保留最近 1000 条
-  if (msgSeqTracker.size > 1000) {
-    const keys = Array.from(msgSeqTracker.keys());
-    for (let i = 0; i < 500; i++) {
-      msgSeqTracker.delete(keys[i]);
-    }
-  }
-  
-  // 结合时间戳基础值，确保唯一性
-  return seqBaseTime + next;
+export function getNextMsgSeq(_msgId: string): number {
+  globalSeqCounter++;
+  return seqBaseTime + globalSeqCounter;
 }
 
 // API 请求超时配置（毫秒）
