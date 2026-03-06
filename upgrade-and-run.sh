@@ -1,9 +1,18 @@
 #!/bin/bash
 
-# QQBot 一键更新并启动脚本
-# 版本: 2.0 (增强错误处理版)
+# QQBot 插件更新脚本
+# 版本: 2.1 (仅更新插件版)
 #
-# 主要改进:
+# 功能说明:
+# 1. 备份已有 qqbot 通道配置
+# 2. 移除老版本插件
+# 3. 安装当前版本插件
+# 4. 恢复或配置机器人通道
+#
+# 注意: 此脚本仅更新插件，不启动 openclaw
+# 更新完成后需要手动重启 openclaw 服务以加载新插件
+#
+# 主要特性:
 # 1. 详细的安装错误诊断和排查建议
 # 2. 所有关键步骤的错误捕获和报告
 # 3. 日志文件保存和错误摘要
@@ -28,7 +37,6 @@ cd "$SCRIPT_DIR"
 # 解析命令行参数
 APPID=""
 SECRET=""
-MARKDOWN=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -40,28 +48,24 @@ while [[ $# -gt 0 ]]; do
             SECRET="$2"
             shift 2
             ;;
-        --markdown)
-            MARKDOWN="$2"
-            shift 2
-            ;;
         -h|--help)
             echo "用法: $0 [选项]"
+            echo ""
+            echo "QQBot 插件更新脚本 - 更新 QQBot 插件到最新版本"
             echo ""
             echo "选项:"
             echo "  --appid <appid>       QQ机器人 AppID"
             echo "  --secret <secret>     QQ机器人 Secret"
-            echo "  --markdown <yes|no>   是否启用 Markdown 消息格式（默认: no）"
             echo "  -h, --help            显示帮助信息"
             echo ""
             echo "也可以通过环境变量设置:"
             echo "  QQBOT_APPID           QQ机器人 AppID"
             echo "  QQBOT_SECRET          QQ机器人 Secret"
             echo "  QQBOT_TOKEN           QQ机器人 Token (AppID:Secret)"
-            echo "  QQBOT_MARKDOWN        是否启用 Markdown（yes/no）"
             echo ""
-            echo "不带参数时，将使用已有配置直接启动。"
+            echo "不带参数时，将使用已有配置更新插件。"
             echo ""
-            echo "⚠️  注意: 启用 Markdown 需要在 QQ 开放平台申请 Markdown 消息权限"
+            echo "注意: 插件更新后需要重启 OpenClaw 服务才能生效"
             exit 0
             ;;
         *)
@@ -75,15 +79,14 @@ done
 # 使用命令行参数或环境变量
 APPID="${APPID:-$QQBOT_APPID}"
 SECRET="${SECRET:-$QQBOT_SECRET}"
-MARKDOWN="${MARKDOWN:-$QQBOT_MARKDOWN}"
 
 echo "========================================="
-echo "  QQBot 一键更新启动脚本"
+echo "  QQBot 插件更新脚本"
 echo "========================================="
 
 # 1. 备份已有 qqbot 通道配置，防止升级过程丢失
 echo ""
-echo "[1/6] 备份已有配置..."
+echo "[1/4] 备份已有配置..."
 SAVED_QQBOT_TOKEN=""
 for APP_NAME in openclaw clawdbot; do
     CONFIG_FILE="$HOME/.$APP_NAME/$APP_NAME.json"
@@ -106,7 +109,7 @@ done
 
 # 2. 移除老版本
 echo ""
-echo "[2/6] 移除老版本..."
+echo "[2/4] 移除老版本..."
 if [ -f "./scripts/upgrade.sh" ]; then
     bash ./scripts/upgrade.sh
 else
@@ -115,7 +118,7 @@ fi
 
 # 3. 安装当前版本
 echo ""
-echo "[3/6] 安装当前版本..."
+echo "[3/4] 安装当前版本..."
 
 echo "检查当前目录: $(pwd)"
 echo "检查openclaw版本: $(openclaw --version 2>/dev/null || echo 'openclaw not found')"
@@ -189,7 +192,7 @@ fi
 
 # 4. 配置机器人通道（仅在提供了 appid/secret 时才配置，否则使用已有配置）
 echo ""
-echo "[4/6] 配置机器人通道..."
+echo "[4/4] 配置机器人通道..."
 
 if [ -n "$APPID" ] && [ -n "$SECRET" ]; then
     QQBOT_TOKEN="${APPID}:${SECRET}"
@@ -232,130 +235,17 @@ else
     fi
 fi
 
-# 5. 配置 Markdown 选项（仅在明确指定时才配置）
-echo ""
-echo "[5/6] 配置 Markdown 选项..."
-
-if [ -n "$MARKDOWN" ]; then
-    # 设置 markdown 配置
-    if [ "$MARKDOWN" = "yes" ] || [ "$MARKDOWN" = "y" ] || [ "$MARKDOWN" = "true" ]; then
-        MARKDOWN_VALUE="true"
-        echo "启用 Markdown 消息格式..."
-    else
-        MARKDOWN_VALUE="false"
-        echo "禁用 Markdown 消息格式（使用纯文本）..."
-    fi
-
-    # 优先使用 openclaw config set，失败时回退到直接编辑 JSON
-    if openclaw config set channels.qqbot.markdownSupport "$MARKDOWN_VALUE" 2>&1; then
-        echo "✅ Markdown配置成功"
-    else
-        echo "⚠️  openclaw config set 失败，尝试直接编辑配置文件..."
-        OPENCLAW_CONFIG="$HOME/.openclaw/openclaw.json"
-        if [ -f "$OPENCLAW_CONFIG" ] && node -e "
-          const fs = require('fs');
-          const cfg = JSON.parse(fs.readFileSync('$OPENCLAW_CONFIG', 'utf-8'));
-          if (!cfg.channels) cfg.channels = {};
-          if (!cfg.channels.qqbot) cfg.channels.qqbot = {};
-          cfg.channels.qqbot.markdownSupport = $MARKDOWN_VALUE;
-          fs.writeFileSync('$OPENCLAW_CONFIG', JSON.stringify(cfg, null, 4) + '\n');
-        " 2>&1; then
-            echo "✅ Markdown配置成功（直接编辑配置文件）"
-        else
-            echo "⚠️  Markdown配置设置失败，不影响后续运行"
-        fi
-    fi
-else
-    echo "未指定 Markdown 选项，使用已有配置"
-fi
-
-# 6. 启动 openclaw
-echo ""
-echo "[6/6] 启动 openclaw..."
-echo "========================================="
-
-# 检查openclaw是否可用
-if ! command -v openclaw &> /dev/null; then
-    echo "❌ 错误: openclaw 命令未找到！"
-    echo ""
-    echo "可能的原因:"
-    echo "1. OpenClaw未安装或安装失败"
-    echo "2. PATH环境变量未包含openclaw路径"
-    echo "3. 需要重新登录或重启终端"
-    echo ""
-    echo "解决方案:"
-    echo "1. 检查OpenClaw安装: which openclaw 或 find / -name openclaw 2>/dev/null"
-    echo "2. 手动启动: 进入OpenClaw安装目录执行"
-    echo "3. 添加PATH: export PATH=\"\$PATH:/path/to/openclaw\""
-    echo ""
-    exit 1
-fi
-
-# 显示启动信息
-echo "启动命令: openclaw gateway --verbose"
-echo "OpenClaw版本: $(openclaw --version 2>/dev/null || echo '未知')"
-echo "当前目录: $(pwd)"
-echo ""
-echo "如果启动失败，请检查:"
-echo "1. 端口占用: lsof -i :3000 (或OpenClaw使用的端口)"
-echo "2. 配置文件: ls -la ~/.openclaw/"
-
-echo "3. 查看日志: tail -f ~/.openclaw/logs/*.log 2>/dev/null || echo '无日志文件'"
-echo ""
-echo "按 Ctrl+C 停止服务"
-echo "========================================="
-
-# 如果已有 gateway 在运行，先停掉再启动（插件更新后需要重启才能生效）
-if openclaw gateway stop 2>/dev/null; then
-    echo "已停止旧的 gateway 进程，等待释放端口..."
-    sleep 2
-fi
-
-echo "正在启动 OpenClaw 网关服务..."
-START_TIME=$(date +%s)
-
-# 启动服务并捕获输出
-GATEWAY_LOG="/tmp/openclaw-gateway-$(date +%s).log"
-echo "网关日志: $GATEWAY_LOG"
-
-set +e  # 临时禁用严格错误检查，让用户可以Ctrl+C停止
-openclaw gateway --verbose 2>&1 | grep --line-buffered -v '\[ws\] → event \(health\|tick\)' | tee "$GATEWAY_LOG"
-EXIT_CODE=$?
-set -e  # 重新启用严格错误检查
-
-END_TIME=$(date +%s)
-RUNTIME=$((END_TIME - START_TIME))
-
+# 完成
 echo ""
 echo "========================================="
-echo "服务运行了 ${RUNTIME} 秒后退出，退出代码: $EXIT_CODE"
-
-if [ $EXIT_CODE -eq 0 ]; then
-    echo "✅ OpenClaw 正常退出"
-elif [ $EXIT_CODE -eq 130 ]; then
-    echo "⚠️  OpenClaw 被用户中断 (Ctrl+C)"
-else
-    echo "❌ OpenClaw 异常退出 (代码: $EXIT_CODE)"
-    echo ""
-    echo "故障诊断信息:"
-    echo "1. 查看完整日志: cat $GATEWAY_LOG"
-    echo "2. 常见错误代码:"
-    echo "   - 1: 一般错误"
-    echo "   - 2: 配置错误"
-    echo "   - 3: 端口占用"
-    echo "   - 4: 依赖缺失"
-    echo ""
-    echo "3. 检查步骤:"
-    echo "   a. 检查端口: lsof -i :3000 2>/dev/null || echo '端口3000可用'"
-    echo "   b. 检查依赖: openclaw --version"
-    echo "   c. 检查配置: ls -la ~/.openclaw/config.yaml 2>/dev/null"
-    
-    # 显示错误摘要
-    if [ -f "$GATEWAY_LOG" ]; then
-        echo ""
-        echo "4. 错误摘要:"
-        tail -30 "$GATEWAY_LOG" | grep -i -E "(error|fail|exception|panic|uncaught|syntax)"
-    fi
-fi
-
+echo "✅ 插件更新完成！"
+echo "========================================="
+echo ""
+echo "插件已成功更新。如需启动 OpenClaw，请手动运行："
+echo "  openclaw gateway --verbose"
+echo ""
+echo "或者如果 OpenClaw 已在运行，请重启服务以加载新插件："
+echo "  openclaw gateway stop"
+echo "  openclaw gateway --verbose"
+echo ""
 echo "========================================="

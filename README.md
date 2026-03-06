@@ -244,29 +244,13 @@ openclaw gateway
 > only for installed by`openclaw plugins install`
 
 ```
-openclaw plugins upgrade @sliverp/qqbot@latest
-```
-
-## Using npx
-```
-npx -y @sliverp/qqbot@latest upgrade
+openclaw plugins update qqbot
 ```
 
 ## Using resource code
 ```
 git clone https://github.com/sliverp/qqbot.git && cd qqbot 
-
-# run upgrade script
-bash ./scripts/upgrade.sh
-
-# re-install
-clawdbot plugins install .
-
-# re-config
-clawdbot channels add --channel qqbot --token "AppID:AppSecret"
-
-# restart gateway
-clawdbot gateway restart
+./upgrade-and-run.sh
 ```
 
 # Other Language README
