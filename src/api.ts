@@ -144,22 +144,14 @@ export function getTokenStatus(): { status: "valid" | "expired" | "refreshing" |
 }
 
 /**
- * msg_seq 全局递增计数器
- * QQ 服务端要求同一个发送目标（用户/群）内 msg_seq 唯一
- * 使用时间戳作为基础值 + 全局递增，确保：
- * 1. 进程重启后不会与之前的 seq 重复
- * 2. 不同 msg_id 的回复也不会产生相同的 seq
- */
-const seqBaseTime = Math.floor(Date.now() / 1000) % 100000000; // 取秒级时间戳的后8位作为基础
-let globalSeqCounter = 0;
-
-/**
- * 获取并递增消息序号（全局唯一）
+ * 获取全局唯一的消息序号（范围 0 ~ 65535）
+ * 使用毫秒级时间戳低位 + 随机数混合，确保唯一性
  * @param _msgId - 保留参数，不再用于分桶计数
  */
 export function getNextMsgSeq(_msgId: string): number {
-  globalSeqCounter++;
-  return seqBaseTime + globalSeqCounter;
+  const timePart = Date.now() % 100000000; // 毫秒时间戳取模 60000（0~59999）
+  const random = Math.floor(Math.random() * 65536); // 0~65535
+  return (timePart ^ random) % 65536; // 异或混合后限制在 0~65535
 }
 
 // API 请求超时配置（毫秒）
