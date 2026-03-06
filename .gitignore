@@ -1,4 +1,8 @@
 node_modules
 dist
-distnode_modules
 package-lock.json
+.DS_Store
+.idea/
+.codebuddy/
+.codebuddy.zip
+openclaw.json

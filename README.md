@@ -6,7 +6,7 @@ QQ 开放平台 Bot API 的 Openclaw 渠道插件，支持 C2C 私聊、群聊 @
 
 The Openclaw channel plugin of the Bot API of the QQ Open Platform supports C2C private chats, group chat @ messages, and channel messages.
 
-[![npm version](https://img.shields.io/badge/npm-v1.4.1-blue)](https://www.npmjs.com/package/@sliverp/qqbot)
+[![npm version](https://img.shields.io/badge/npm-v1.5.2-blue)](https://www.npmjs.com/package/@sliverp/qqbot)
 [![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 [![QQ Bot](https://img.shields.io/badge/QQ_Bot-API_v2-red)](https://bot.q.qq.com/wiki/)
 [![Platform](https://img.shields.io/badge/platform-Openclaw-orange)](https://github.com/sliverp/openclaw)
@@ -36,7 +36,7 @@ The Openclaw channel plugin of the Bot API of the QQ Open Platform supports C2C 
 ## ✨ 功能特性
 
 - 🔒 **多场景支持** - C2C 私聊、群聊 @消息、频道消息、频道私信
-- 🖼️ **富媒体消息** - 支持图片收发、文件发送
+- 🖼️ **富媒体消息** - 支持图片、语音、视频、文件收发
 - ⏰ **定时推送** - 支持定时任务到时后主动推送
 - 🔗 **URL 无限制** - 私聊可直接发送 URL
 - ⌨️ **输入状态** - Bot 正在输入中状态提示
@@ -168,7 +168,7 @@ Edit ~/.openclaw/openclaw.json:
 
 ### STT (Speech-to-Text) — Transcribe incoming voice messages
 
-STT reuses your existing model provider configuration. Add an audio model entry in `tools.media.audio.models`:
+STT supports any provider that implements a compatible transcription API. Add an audio model entry in `tools.media.audio.models`:
 
 ``` json
 {
@@ -177,8 +177,8 @@ STT reuses your existing model provider configuration. Add an audio model entry 
       "audio": {
         "models": [
           {
-            "provider": "openai",
-            "model": "whisper-1"
+            "provider": "your-provider",
+            "model": "your-stt-model"
           }
         ]
       }
@@ -186,17 +186,17 @@ STT reuses your existing model provider configuration. Add an audio model entry 
   },
   "models": {
     "providers": {
-      "openai": {
-        "baseUrl": "https://api.openai.com/v1",
-        "apiKey": "sk-xxx"
+      "your-provider": {
+        "baseUrl": "https://your-provider-api-base-url",
+        "apiKey": "your-api-key"
       }
     }
   }
 }
 ```
 
-- `provider` — references a key in `models.providers` to inherit `baseUrl` and `apiKey` (default: `"openai"`)
-- `model` — STT model name (default: `"whisper-1"`)
+- `provider` — references a key in `models.providers` to inherit `baseUrl` and `apiKey`
+- `model` — STT model name
 - You can also set `baseUrl` / `apiKey` directly in the audio model entry to override the provider defaults
 - When configured, incoming voice messages are automatically converted (SILK→WAV) and transcribed
 
@@ -209,21 +209,21 @@ Configure TTS under `channels.qqbot.tts`:
   "channels": {
     "qqbot": {
       "tts": {
-        "provider": "openai",
-        "model": "tts-1",
-        "voice": "alloy"
+        "provider": "your-provider",
+        "model": "your-tts-model",
+        "voice": "your-voice"
       }
     }
   }
 }
 ```
 
-- `provider` — references a key in `models.providers` to inherit `baseUrl` and `apiKey` (default: `"openai"`)
-- `model` — TTS model name (default: `"tts-1"`)
-- `voice` — voice variant (default: `"alloy"`)
+- `provider` — references a key in `models.providers` to inherit `baseUrl` and `apiKey`
+- `model` — TTS model name
+- `voice` — voice variant
 - `baseUrl` / `apiKey` — optional overrides for the provider defaults
 - `enabled` — set to `false` to disable (default: `true`)
-- When configured, the AI can use `<qqvoice>` tags to generate and send voice messages via OpenAI-compatible TTS API
+- When configured, the AI can use `<qqvoice>` tags to generate and send voice messages via compatible TTS API
 
 # Step 4: Start and Test
 
@@ -252,7 +252,7 @@ openclaw plugins upgrade @sliverp/qqbot@latest
 npx -y @sliverp/qqbot@latest upgrade
 ```
 
-## Using resource code
+## Using source code
 ```
 git clone https://github.com/sliverp/qqbot.git && cd qqbot 
 
@@ -260,13 +260,13 @@ git clone https://github.com/sliverp/qqbot.git && cd qqbot
 bash ./scripts/upgrade.sh
 
 # re-install
-clawdbot plugins install .
+openclaw plugins install .
 
 # re-config
-clawdbot channels add --channel qqbot --token "AppID:AppSecret"
+openclaw channels add --channel qqbot --token "AppID:AppSecret"
 
 # restart gateway
-clawdbot gateway restart
+openclaw gateway restart
 ```
 
 # Other Language README

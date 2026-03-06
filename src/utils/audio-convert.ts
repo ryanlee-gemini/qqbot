@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { decode, encode, isSilk } from "silk-wasm";
+import { detectFfmpeg, isWindows } from "./platform.js";
 
 /**
  * 检查文件是否为 SILK 格式（QQ/微信语音常用格式）
@@ -193,6 +194,9 @@ export async function textToSpeechPCM(
 ): Promise<{ pcmBuffer: Buffer; sampleRate: number }> {
   const sampleRate = 24000;
 
+  const controller = new AbortController();
+  const ttsTimeout = setTimeout(() => controller.abort(), 120000);
+
   const resp = await fetch(`${ttsCfg.baseUrl}/audio/speech`, {
     method: "POST",
     headers: {
@@ -207,7 +211,8 @@ export async function textToSpeechPCM(
       sample_rate: sampleRate,
       stream: false,
     }),
-  });
+    signal: controller.signal,
+  }).finally(() => clearTimeout(ttsTimeout));
 
   if (!resp.ok) {
     const detail = await resp.text().catch(() => "");
@@ -302,12 +307,12 @@ export async function audioFileToSilkBase64(filePath: string, directUploadFormat
 
   const targetRate = 24000;
 
-  // 2. 优先使用 ffmpeg（业界标准做法）
-  const hasFfmpeg = await checkFfmpeg();
-  if (hasFfmpeg) {
+  // 2. 优先使用 ffmpeg（业界标准做法，跨平台检测）
+  const ffmpegCmd = await checkFfmpeg();
+  if (ffmpegCmd) {
     try {
-      console.log(`[audio-convert] ffmpeg: converting ${ext} (${buf.length} bytes) → PCM s16le ${targetRate}Hz`);
-      const pcmBuf = await ffmpegToPCM(filePath, targetRate);
+      console.log(`[audio-convert] ffmpeg (${ffmpegCmd}): converting ${ext} (${buf.length} bytes) → PCM s16le ${targetRate}Hz`);
+      const pcmBuf = await ffmpegToPCM(ffmpegCmd, filePath, targetRate);
       if (pcmBuf.length === 0) {
         console.error(`[audio-convert] ffmpeg produced empty PCM output`);
         return null;
@@ -350,7 +355,12 @@ export async function audioFileToSilkBase64(filePath: string, directUploadFormat
     }
   }
 
-  console.error(`[audio-convert] unsupported format: ${ext} (no ffmpeg available). Install ffmpeg for full format support.`);
+  const installHint = isWindows()
+    ? "安装方式: choco install ffmpeg 或 scoop install ffmpeg 或从 https://ffmpeg.org 下载"
+    : process.platform === "darwin"
+      ? "安装方式: brew install ffmpeg"
+      : "安装方式: sudo apt install ffmpeg 或 sudo yum install ffmpeg";
+  console.error(`[audio-convert] unsupported format: ${ext} (no ffmpeg available). ${installHint}`);
   return null;
 }
 
@@ -359,11 +369,11 @@ export async function audioFileToSilkBase64(filePath: string, directUploadFormat
  * 用于 TTS 生成后等待文件写入完成
  *
  * @param filePath 文件路径
- * @param timeoutMs 最大等待时间（默认 30 秒）
+ * @param timeoutMs 最大等待时间（默认 2 分钟）
  * @param pollMs 轮询间隔（默认 500ms）
  * @returns 文件大小（字节），超时或文件始终为空返回 0
  */
-export async function waitForFile(filePath: string, timeoutMs: number = 30000, pollMs: number = 500): Promise<number> {
+export async function waitForFile(filePath: string, timeoutMs: number = 120000, pollMs: number = 500): Promise<number> {
   const start = Date.now();
   let lastSize = -1;
   let stableCount = 0;
@@ -410,33 +420,24 @@ export async function waitForFile(filePath: string, timeoutMs: number = 30000, p
   return 0;
 }
 
-// ============ ffmpeg 可用性检测 ============
-
-let _ffmpegAvailable: boolean | null = null;
+// ============ ffmpeg 跨平台调用 ============
 
 /**
- * 检测系统是否安装了 ffmpeg
- * 结果会缓存，只检测一次
+ * 检测 ffmpeg 是否可用（委托给 platform.ts 跨平台检测）
+ * @returns ffmpeg 可执行路径或 null
  */
-function checkFfmpeg(): Promise<boolean> {
-  if (_ffmpegAvailable !== null) return Promise.resolve(_ffmpegAvailable);
-  return new Promise((resolve) => {
-    execFile("ffmpeg", ["-version"], { timeout: 5000 }, (err) => {
-      _ffmpegAvailable = !err;
-      if (_ffmpegAvailable) {
-        console.log("[audio-convert] ffmpeg detected, using ffmpeg for audio decoding");
-      } else {
-        console.warn("[audio-convert] ffmpeg not found, falling back to WASM decoders (limited format support)");
-      }
-      resolve(_ffmpegAvailable);
-    });
-  });
+async function checkFfmpeg(): Promise<string | null> {
+  return detectFfmpeg();
 }
 
 /**
  * 使用 ffmpeg 将任意音频文件转换为 PCM s16le 单声道 24kHz
+ *
+ * 跨平台注意:
+ * - Windows 上 pipe:1 需要 encoding: "buffer" 防止 BOM 问题
+ * - 使用 detectFfmpeg() 返回的完整路径，兼容非 PATH 安装
  */
-function ffmpegToPCM(inputPath: string, sampleRate: number = 24000): Promise<Buffer> {
+function ffmpegToPCM(ffmpegCmd: string, inputPath: string, sampleRate: number = 24000): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const args = [
       "-i", inputPath,
@@ -447,9 +448,11 @@ function ffmpegToPCM(inputPath: string, sampleRate: number = 24000): Promise<Buf
       "-v", "error",
       "pipe:1",
     ];
-    execFile("ffmpeg", args, {
+    execFile(ffmpegCmd, args, {
       maxBuffer: 50 * 1024 * 1024,
       encoding: "buffer",
+      // Windows: 隐藏弹出的 cmd 窗口
+      ...(isWindows() ? { windowsHide: true } : {}),
     }, (err, stdout) => {
       if (err) {
         reject(new Error(`ffmpeg failed: ${err.message}`));

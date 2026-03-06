@@ -24,6 +24,7 @@ import {
 import { isAudioFile, audioFileToSilkBase64, waitForFile } from "./utils/audio-convert.js";
 import { normalizeMediaTags } from "./utils/media-tags.js";
 import { checkFileSize, readFileAsync, fileExistsAsync, isLargeFile, formatFileSize } from "./utils/file-utils.js";
+import { isLocalPath as isLocalFilePath, normalizePath, sanitizeFileName } from "./utils/platform.js";
 
 // ============ 消息回复限流器 ============
 // 同一 message_id 1小时内最多回复 4 次，超过 1 小时无法被动回复（需改为主动消息）
@@ -303,11 +304,12 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
       
       const tagName = match[1]!.toLowerCase(); // "qqimg" or "qqvoice" or "qqfile"
       
-      // 剥离 MEDIA: 前缀（框架可能注入）
+      // 剥离 MEDIA: 前缀（框架可能注入），展开 ~ 路径
       let mediaPath = match[2]?.trim() ?? "";
       if (mediaPath.startsWith("MEDIA:")) {
         mediaPath = mediaPath.slice("MEDIA:".length);
       }
+      mediaPath = normalizePath(mediaPath);
       
       if (mediaPath) {
         if (tagName === "qqvoice") {
@@ -530,7 +532,7 @@ export async function sendText(ctx: OutboundContext): Promise<OutboundResult> {
           // 发送文件
           const filePath = item.content;
           const isHttpUrl = filePath.startsWith("http://") || filePath.startsWith("https://");
-          const fileName = path.basename(filePath);
+          const fileName = sanitizeFileName(path.basename(filePath));
 
           if (isHttpUrl) {
             // 公网 URL：直接通过 url 参数上传
@@ -755,7 +757,8 @@ export async function sendProactiveMessage(
  */
 export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResult> {
   const { to, text, replyToId, account } = ctx;
-  const { mediaUrl } = ctx;
+  // 展开波浪线路径：~/Desktop/file.png → /Users/xxx/Desktop/file.png
+  const mediaUrl = normalizePath(ctx.mediaUrl);
 
   if (!account.appId || !account.clientSecret) {
     return { channel: "qqbot", error: "QQBot not configured (missing appId or clientSecret)" };
@@ -766,10 +769,7 @@ export async function sendMedia(ctx: MediaOutboundContext): Promise<OutboundResu
   }
 
   // 判断是否为语音文件（本地文件路径 + 音频扩展名）
-  const isLocalPath = mediaUrl.startsWith("/") || 
-                      /^[a-zA-Z]:[\\/]/.test(mediaUrl) ||
-                      mediaUrl.startsWith("./") ||
-                      mediaUrl.startsWith("../");
+  const isLocalPath = isLocalFilePath(mediaUrl);
   const isHttpUrl = mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://");
 
   if (isLocalPath && isAudioFile(mediaUrl)) {
@@ -1109,7 +1109,7 @@ async function sendDocumentFile(ctx: MediaOutboundContext): Promise<OutboundResu
   }
 
   const isHttpUrl = mediaUrl.startsWith("http://") || mediaUrl.startsWith("https://");
-  const fileName = path.basename(mediaUrl);
+  const fileName = sanitizeFileName(path.basename(mediaUrl));
 
   try {
     const accessToken = await getAccessToken(account.appId, account.clientSecret);

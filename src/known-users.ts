@@ -27,14 +27,10 @@ export interface KnownUser {
   interactionCount: number;
 }
 
-// 存储文件路径
-const KNOWN_USERS_DIR = path.join(
-  process.env.HOME || "/tmp",
-  ".openclaw",
-  "qqbot",
-  "data"
-);
+import { getQQBotDataDir } from "./utils/platform.js";
 
+// 存储文件路径
+const KNOWN_USERS_DIR = getQQBotDataDir("data");
 const KNOWN_USERS_FILE = path.join(KNOWN_USERS_DIR, "known-users.json");
 
 // 内存缓存

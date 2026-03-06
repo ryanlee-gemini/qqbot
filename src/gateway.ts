@@ -12,6 +12,7 @@ import { parseQQBotPayload, encodePayloadForCron, isCronReminderPayload, isMedia
 import { convertSilkToWav, isVoiceAttachment, formatDuration, resolveTTSConfig, textToSilk, audioFileToSilkBase64, waitForFile } from "./utils/audio-convert.js";
 import { normalizeMediaTags } from "./utils/media-tags.js";
 import { checkFileSize, readFileAsync, fileExistsAsync, isLargeFile, formatFileSize } from "./utils/file-utils.js";
+import { getQQBotDataDir, isLocalPath as isLocalFilePath, looksLikeLocalPath, normalizePath, sanitizeFileName, runDiagnostics } from "./utils/platform.js";
 
 /**
  * 通用 OpenAI 兼容 STT（语音转文字）
@@ -70,7 +71,7 @@ async function transcribeAudio(audioPath: string, cfg: Record<string, unknown>):
   if (!sttCfg) return null;
 
   const fileBuffer = fs.readFileSync(audioPath);
-  const fileName = path.basename(audioPath);
+  const fileName = sanitizeFileName(path.basename(audioPath));
   const mime = fileName.endsWith(".wav") ? "audio/wav"
     : fileName.endsWith(".mp3") ? "audio/mpeg"
     : fileName.endsWith(".ogg") ? "audio/ogg"
@@ -138,7 +139,7 @@ const QUICK_DISCONNECT_THRESHOLD = 5000; // 5秒内断开视为快速断开
 // 图床服务器配置（可通过环境变量覆盖）
 const IMAGE_SERVER_PORT = parseInt(process.env.QQBOT_IMAGE_SERVER_PORT || "18765", 10);
 // 使用绝对路径，确保文件保存和读取使用同一目录
-const IMAGE_SERVER_DIR = process.env.QQBOT_IMAGE_SERVER_DIR || path.join(process.env.HOME || "/home/ubuntu", ".openclaw", "qqbot", "images");
+const IMAGE_SERVER_DIR = process.env.QQBOT_IMAGE_SERVER_DIR || getQQBotDataDir("images");
 
 // 消息队列配置（异步处理，防止阻塞心跳）
 const MESSAGE_QUEUE_SIZE = 1000; // 最大队列长度
@@ -314,6 +315,14 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
 
   if (!account.appId || !account.clientSecret) {
     throw new Error("QQBot not configured (missing appId or clientSecret)");
+  }
+
+  // 启动环境诊断（首次连接时执行）
+  const diag = await runDiagnostics();
+  if (diag.warnings.length > 0) {
+    for (const w of diag.warnings) {
+      log?.info(`[qqbot:${account.accountId}] ${w}`);
+    }
   }
 
   // 初始化 API 配置（markdown 支持）
@@ -580,7 +589,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
         const imageMediaTypes: string[] = [];
         const voiceTranscripts: string[] = [];
         // 存到 .openclaw/qqbot 目录下的 downloads 文件夹
-        const downloadDir = path.join(process.env.HOME || "/home/ubuntu", ".openclaw", "qqbot", "downloads");
+        const downloadDir = getQQBotDataDir("downloads");
         
         if (event.attachments?.length) {
           const otherAttachments: string[] = [];
@@ -887,7 +896,7 @@ ${ttsHint}${sttHint}`;
 
           // 追踪是否有响应
           let hasResponse = false;
-          const responseTimeout = 60000; // 60秒超时（1分钟）
+          const responseTimeout = 120000; // 120秒超时（2分钟，与 TTS/文件生成超时对齐）
           let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
           const timeoutPromise = new Promise<void>((_, reject) => {
@@ -957,11 +966,12 @@ ${ttsHint}${sttHint}`;
                     
                     const tagName = match[1]!.toLowerCase(); // "qqimg" or "qqvoice" or "qqfile"
                     
-                    // 剥离 MEDIA: 前缀（框架可能注入）
+                    // 剥离 MEDIA: 前缀（框架可能注入），展开 ~ 路径
                     let mediaPath = match[2]?.trim() ?? "";
                     if (mediaPath.startsWith("MEDIA:")) {
                       mediaPath = mediaPath.slice("MEDIA:".length);
                     }
+                    mediaPath = normalizePath(mediaPath);
                     
                     if (mediaPath) {
                       if (tagName === "qqvoice") {
@@ -1009,13 +1019,13 @@ ${ttsHint}${sttHint}`;
                         log?.error(`[qqbot:${account.accountId}] Failed to send text: ${err}`);
                       }
                     } else if (item.type === "image") {
-                      // 发送图片
-                      const imagePath = item.content;
+                      // 发送图片（展开 ~ 路径）
+                      const imagePath = normalizePath(item.content);
                       try {
                         let imageUrl = imagePath;
                         
                         // 判断是本地文件还是 URL
-                        const isLocalPath = imagePath.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(imagePath);
+                        const isLocalPath = isLocalFilePath(imagePath);
                         const isHttpUrl = imagePath.startsWith("http://") || imagePath.startsWith("https://");
                         
                         if (isLocalPath) {
@@ -1094,8 +1104,8 @@ ${ttsHint}${sttHint}`;
                         await sendErrorMessage(`图片发送失败，图片似乎不存在哦，图片路径：${imagePath}`);
                       }
                     } else if (item.type === "voice") {
-                      // 发送语音文件
-                      const voicePath = item.content;
+                      // 发送语音文件（展开 ~ 路径）
+                      const voicePath = normalizePath(item.content);
                       try {
                         // 等待文件就绪（TTS 工具异步生成，文件可能还没写完）
                         const fileSize = await waitForFile(voicePath);
@@ -1131,8 +1141,8 @@ ${ttsHint}${sttHint}`;
                         await sendErrorMessage(`语音发送失败: ${err}`);
                       }
                     } else if (item.type === "video") {
-                      // 发送视频（支持公网 URL 和本地文件）
-                      const videoPath = item.content;
+                      // 发送视频（支持公网 URL 和本地文件，展开 ~ 路径）
+                      const videoPath = normalizePath(item.content);
                       try {
                         const isHttpUrl = videoPath.startsWith("http://") || videoPath.startsWith("https://");
 
@@ -1192,11 +1202,11 @@ ${ttsHint}${sttHint}`;
                         await sendErrorMessage(`视频发送失败: ${err}`);
                       }
                     } else if (item.type === "file") {
-                      // 发送文件
-                      const filePath = item.content;
+                      // 发送文件（展开 ~ 路径）
+                      const filePath = normalizePath(item.content);
                       try {
                         const isHttpUrl = filePath.startsWith("http://") || filePath.startsWith("https://");
-                        const fileName = path.basename(filePath);
+                        const fileName = sanitizeFileName(path.basename(filePath));
 
                         // 本地文件大文件进度提示
                         if (!isHttpUrl) {
@@ -1318,8 +1328,8 @@ ${ttsHint}${sttHint}`;
                       log?.info(`[qqbot:${account.accountId}] Processing media payload, mediaType: ${parsedPayload.mediaType}`);
                       
                       if (parsedPayload.mediaType === "image") {
-                        // 处理图片发送
-                        let imageUrl = parsedPayload.path;
+                        // 处理图片发送（展开 ~ 路径）
+                        let imageUrl = normalizePath(parsedPayload.path);
                         
                         // 如果是本地文件，转换为 Base64 Data URL
                         if (parsedPayload.source === "file") {
@@ -1401,7 +1411,7 @@ ${ttsHint}${sttHint}`;
                               await sendErrorMessage(`[QQBot] TTS 未配置，请在 openclaw.json 的 channels.qqbot.tts 中配置`);
                             } else {
                               log?.info(`[qqbot:${account.accountId}] TTS: "${ttsText.slice(0, 50)}..." via ${ttsCfg.model}`);
-                              const ttsDir = path.join(process.env.HOME || "/home/ubuntu", ".openclaw", "qqbot", "tts");
+                              const ttsDir = getQQBotDataDir("tts");
                               const { silkBase64, duration } = await textToSilk(ttsText, ttsCfg, ttsDir);
                               log?.info(`[qqbot:${account.accountId}] TTS done: ${formatDuration(duration)}, uploading voice...`);
 
@@ -1424,7 +1434,7 @@ ${ttsHint}${sttHint}`;
                       } else if (parsedPayload.mediaType === "video") {
                         // 视频发送：支持公网 URL 和本地文件
                         try {
-                          const videoPath = parsedPayload.path;
+                          const videoPath = normalizePath(parsedPayload.path ?? "");
                           if (!videoPath?.trim()) {
                             await sendErrorMessage(`[QQBot] 视频消息缺少视频路径`);
                           } else {
@@ -1485,12 +1495,12 @@ ${ttsHint}${sttHint}`;
                       } else if (parsedPayload.mediaType === "file") {
                         // 文件发送
                         try {
-                          const filePath = parsedPayload.path;
+                          const filePath = normalizePath(parsedPayload.path ?? "");
                           if (!filePath?.trim()) {
                             await sendErrorMessage(`[QQBot] 文件消息缺少文件路径`);
                           } else {
                             const isHttpUrl = filePath.startsWith("http://") || filePath.startsWith("https://");
-                            const fileName = path.basename(filePath);
+                            const fileName = sanitizeFileName(path.basename(filePath));
                             log?.info(`[qqbot:${account.accountId}] File send: "${filePath.slice(0, 60)}..." (${isHttpUrl ? "URL" : "local"})`);
 
                             await sendWithTokenRetry(async (token) => {
@@ -1576,8 +1586,7 @@ ${ttsHint}${sttHint}`;
                   }
                   
                   // ⚠️ 本地文件路径不再在此处处理，应使用 <qqimg> 标签
-                  const isLocalPath = url.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(url);
-                  if (isLocalPath) {
+                  if (isLocalFilePath(url)) {
                     log?.info(`[qqbot:${account.accountId}] 💡 Local path detected in non-structured message (not sending): ${url}`);
                     log?.info(`[qqbot:${account.accountId}] 💡 Hint: Use <qqimg>${url}</qqimg> tag to send local images`);
                   }
@@ -1605,7 +1614,7 @@ ${ttsHint}${sttHint}`;
                       // 公网 URL：收集并处理
                       imageUrls.push(url);
                       log?.info(`[qqbot:${account.accountId}] Extracted HTTP image from markdown: ${url.slice(0, 80)}...`);
-                    } else if (/^\/?(?:Users|home|tmp|var|private|[A-Z]:)/i.test(url)) {
+                    } else if (looksLikeLocalPath(url)) {
                       // 本地路径：记录日志提示，但不发送
                       log?.info(`[qqbot:${account.accountId}] ⚠️ Local path in markdown (not sending): ${url}`);
                       log?.info(`[qqbot:${account.accountId}] 💡 Use <qqimg>${url}</qqimg> tag to send local images`);

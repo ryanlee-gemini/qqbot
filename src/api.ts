@@ -3,6 +3,7 @@
  */
 
 import { computeFileHash, getCachedFileInfo, setCachedFileInfo } from "./utils/upload-cache.js";
+import { sanitizeFileName } from "./utils/platform.js";
 
 const API_BASE = "https://api.sgroup.qq.com";
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
@@ -548,7 +549,7 @@ export async function uploadC2CMedia(
   }
 
   if (fileType === MediaFileType.FILE && fileName) {
-    body.file_name = fileName;
+    body.file_name = sanitizeFileName(fileName);
   }
   
   // 使用带重试的请求
@@ -609,7 +610,7 @@ export async function uploadGroupMedia(
   }
 
   if (fileType === MediaFileType.FILE && fileName) {
-    body.file_name = fileName;
+    body.file_name = sanitizeFileName(fileName);
   }
   
   // 使用带重试的请求
