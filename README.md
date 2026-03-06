@@ -60,19 +60,55 @@ QQ is a widely-used instant messaging platform that provides various communicati
 
 This integration method connects OpenClaw with a QQ Bot. It utilizes the platform's long-connection event subscription mechanism to receive message and event callbacks, enabling stable and secure message exchange and automation capability integration without exposing a public webhook address.
 
-# Step 1: Install the QQ Bot Plugin
+# Step 1: Install or Update the QQ Bot Plugin
 
-Install via the OpenClaw plugins command.
+## Installation
 
-```
+### Method 1: Install from npm (Recommended)
+
+Install the latest version via OpenClaw plugins command:
+
+```bash
 openclaw plugins install @sliverp/qqbot@latest
 ```
 
-Install from source code:
+### Method 2: Install from Source Code
 
-```
-git clone https://github.com/sliverp/qqbot.git && cd qqbot
+Clone the repository and install locally:
+
+```bash
+git clone https://github.com/sliverp/qqbot.git
+cd qqbot
 openclaw plugins install .
+```
+
+## Update Plugin
+
+### Update via OpenClaw (Recommended)
+
+> For plugins installed via `openclaw plugins install`
+
+Update to the latest version:
+
+```bash
+openclaw plugins update qqbot
+```
+
+### Update from Source Code
+
+For development or source code installations:
+
+```bash
+cd qqbot
+git pull
+bash scripts/upgrade.sh
+```
+
+**Note:** After updating the plugin, you need to restart the OpenClaw gateway service to load the new version:
+
+```bash
+openclaw gateway stop
+openclaw gateway
 ```
 
 # Step 2: Create a QQ Bot
@@ -144,7 +180,7 @@ You need to proceed with the following steps to configure the QQ bot's AppID and
 
 Add the qqbot channel and input the AppID and AppSecret obtained in Step 2.
 
-```
+```bash
 openclaw channels add --channel qqbot --token "AppID:AppSecret"
 ```
 
@@ -152,7 +188,7 @@ openclaw channels add --channel qqbot --token "AppID:AppSecret"
 
 Edit ~/.openclaw/openclaw.json:
 
-``` json
+```json
 {
   "channels": {
     "qqbot": {
@@ -166,11 +202,37 @@ Edit ~/.openclaw/openclaw.json:
 
 ## Voice Capabilities (Optional)
 
+Both STT and TTS support two-level configuration. The plugin searches by priority and stops when it finds a valid configuration. At each level, `baseUrl` and `apiKey` can be automatically inherited from `models.providers`.
+
+### Configuration Priority Overview
+
+| Capability | Priority 1 (Plugin-specific) | Priority 2 (Framework-level fallback) |
+|------------|------------------------------|----------------------------------------|
+| STT | `channels.qqbot.stt` | `tools.media.audio.models[0]` |
+| TTS | `channels.qqbot.tts` | `messages.tts` |
+
+At each level, the resolution order for `baseUrl` and `apiKey`: **Direct configuration at this level → Inherited from `models.providers.<provider>`**. Both must have values for this level to be effective.
+
 ### STT (Speech-to-Text) — Transcribe incoming voice messages
 
-STT reuses your existing model provider configuration. Add an audio model entry in `tools.media.audio.models`:
+**Method 1** (Plugin-specific, highest priority): Configure under `channels.qqbot.stt`:
 
-``` json
+```json
+{
+  "channels": {
+    "qqbot": {
+      "stt": {
+        "provider": "openai",
+        "model": "whisper-1"
+      }
+    }
+  }
+}
+```
+
+**Method 2** (Framework-level fallback): Add an audio model entry in `tools.media.audio.models`. When `channels.qqbot.stt` is not configured, the plugin automatically reads the first entry here:
+
+```json
 {
   "tools": {
     "media": {
@@ -197,14 +259,15 @@ STT reuses your existing model provider configuration. Add an audio model entry 
 
 - `provider` — references a key in `models.providers` to inherit `baseUrl` and `apiKey` (default: `"openai"`)
 - `model` — STT model name (default: `"whisper-1"`)
-- You can also set `baseUrl` / `apiKey` directly in the audio model entry to override the provider defaults
+- `baseUrl` / `apiKey` — optional, write at this level to override provider defaults
+- `enabled` — set to `false` to disable
 - When configured, incoming voice messages are automatically converted (SILK→WAV) and transcribed
 
 ### TTS (Text-to-Speech) — Send voice messages
 
-Configure TTS under `channels.qqbot.tts`:
+**Method 1** (Plugin-specific, highest priority): Configure under `channels.qqbot.tts`:
 
-``` json
+```json
 {
   "channels": {
     "qqbot": {
@@ -218,11 +281,30 @@ Configure TTS under `channels.qqbot.tts`:
 }
 ```
 
+**Method 2** (Framework-level fallback): Configure under `messages.tts`. When `channels.qqbot.tts` is not configured, the plugin automatically reads the configuration here:
+
+```json
+{
+  "messages": {
+    "tts": {
+      "provider": "openai",
+      "openai": {
+        "apiKey": "sk-xxx",
+        "model": "tts-1",
+        "voice": "alloy"
+      }
+    }
+  }
+}
+```
+
+> Note: In `messages.tts`, provider-specific configuration is placed under `messages.tts.<provider>` (e.g., `messages.tts.openai`), which has a slightly different structure from Method 1.
+
 - `provider` — references a key in `models.providers` to inherit `baseUrl` and `apiKey` (default: `"openai"`)
 - `model` — TTS model name (default: `"tts-1"`)
 - `voice` — voice variant (default: `"alloy"`)
-- `baseUrl` / `apiKey` — optional overrides for the provider defaults
-- `enabled` — set to `false` to disable (default: `true`)
+- `baseUrl` / `apiKey` — optional, write at this level to override provider defaults
+- `enabled` — set to `false` to disable (default: `true`); in `messages.tts`, the corresponding field is `auto: "disabled"`
 - When configured, the AI can use `<qqvoice>` tags to generate and send voice messages via OpenAI-compatible TTS API
 
 # Step 4: Start and Test
@@ -236,22 +318,6 @@ openclaw gateway
 ## 2. Chat with the QQbot in QQ
 
 <img width="990" height="984" alt="18" src="https://github.com/user-attachments/assets/b2776c8b-de72-4e37-b34d-e8287ce45de1" />
-
-
-# Upgrade
-## Using openclaw/npm(Recommendation)
-
-> only for installed by`openclaw plugins install`
-
-```
-openclaw plugins update qqbot
-```
-
-## Using resource code
-```
-git clone https://github.com/sliverp/qqbot.git && cd qqbot 
-./upgrade-and-run.sh
-```
 
 # Other Language README
 [简体中文](README.zh.md)

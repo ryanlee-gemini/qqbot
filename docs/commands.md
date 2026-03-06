@@ -133,50 +133,46 @@ openclaw config
 
 ## 🛠️ 项目脚本
 
-项目中提供了一些便捷脚本，简化日常操作：
+项目中提供了一些便捷脚本（位于 `scripts/` 目录），简化日常操作：
 
-### 一键升级并启动
+### 插件更新脚本
 ```bash
-# 基本用法
-./upgrade-and-run.sh
+# 基本用法（从项目根目录执行）
+bash scripts/upgrade.sh
 
 # 指定 AppID 和 Secret
-./upgrade-and-run.sh --appid 123456789 --secret your_secret
-
-# 同时启用 Markdown
-./upgrade-and-run.sh --appid 123456789 --secret your_secret --markdown yes
+bash scripts/upgrade.sh --appid 123456789 --secret your_secret
 
 # 查看帮助
-./upgrade-and-run.sh --help
+bash scripts/upgrade.sh --help
 ```
 
 **环境变量方式：**
 ```bash
 export QQBOT_APPID="123456789"
 export QQBOT_SECRET="your_secret"
-export QQBOT_MARKDOWN="no"
-./upgrade-and-run.sh
+bash scripts/upgrade.sh
 ```
 
 ### Markdown 设置脚本
 ```bash
 # 启用 Markdown
-./set-markdown.sh enable
+bash scripts/set-markdown.sh enable
 
 # 禁用 Markdown
-./set-markdown.sh disable
+bash scripts/set-markdown.sh disable
 
 # 查看当前状态
-./set-markdown.sh status
+bash scripts/set-markdown.sh status
 
 # 交互式选择
-./set-markdown.sh
+bash scripts/set-markdown.sh
 ```
 
-### 升级脚本（清理旧版本）
+### 清理脚本（清理旧版本）
 ```bash
 # 清理旧版本插件和配置
-bash ./scripts/upgrade.sh
+bash scripts/cleanup.sh
 ```
 
 ---
@@ -212,7 +208,7 @@ openclaw channels list
 ### 重新安装插件
 ```bash
 # 1. 清理旧版本
-bash ./scripts/upgrade.sh
+bash scripts/cleanup.sh
 
 # 2. 重新安装
 openclaw plugins install .
