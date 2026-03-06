@@ -311,51 +311,61 @@ if openclaw gateway stop 2>/dev/null; then
     sleep 2
 fi
 
-echo "正在启动 OpenClaw 网关服务..."
-START_TIME=$(date +%s)
+echo "正在安装并启动 OpenClaw 网关服务..."
 
-# 启动服务并捕获输出
-GATEWAY_LOG="/tmp/openclaw-gateway-$(date +%s).log"
-echo "网关日志: $GATEWAY_LOG"
-
-set +e  # 临时禁用严格错误检查，让用户可以Ctrl+C停止
-openclaw gateway --verbose 2>&1 | grep --line-buffered -v '\[ws\] → event \(health\|tick\)' | tee "$GATEWAY_LOG"
-EXIT_CODE=$?
-set -e  # 重新启用严格错误检查
-
-END_TIME=$(date +%s)
-RUNTIME=$((END_TIME - START_TIME))
-
-echo ""
-echo "========================================="
-echo "服务运行了 ${RUNTIME} 秒后退出，退出代码: $EXIT_CODE"
-
-if [ $EXIT_CODE -eq 0 ]; then
-    echo "✅ OpenClaw 正常退出"
-elif [ $EXIT_CODE -eq 130 ]; then
-    echo "⚠️  OpenClaw 被用户中断 (Ctrl+C)"
+# 在后台执行 install 和 start
+if openclaw gateway install && openclaw gateway start; then
+    echo "✅ OpenClaw 网关服务已在后台启动"
+    echo ""
+    echo "正在查看日志 (按 Ctrl+C 退出日志查看)..."
+    echo "========================================="
+    sleep 1
+    
+    # 查找日志文件
+    LOG_DIR="$HOME/.openclaw/logs"
+    LOG_FILE=""
+    
+    if [ -d "$LOG_DIR" ]; then
+        # 查找最新的日志文件
+        LOG_FILE=$(ls -t "$LOG_DIR"/*.log 2>/dev/null | head -1)
+    fi
+    
+    # 查看实时日志
+    set +e  # 临时禁用严格错误检查，让用户可以Ctrl+C停止
+    if [ -n "$LOG_FILE" ] && [ -f "$LOG_FILE" ]; then
+        echo "日志文件: $LOG_FILE"
+        echo ""
+        tail -f "$LOG_FILE"
+        EXIT_CODE=$?
+    else
+        echo "⚠️  未找到日志文件，尝试使用 openclaw logs 命令..."
+        openclaw logs --follow 2>/dev/null || echo "无法获取日志"
+        EXIT_CODE=$?
+    fi
+    set -e  # 重新启用严格错误检查
+    
+    echo ""
+    echo "========================================="
+    if [ $EXIT_CODE -eq 130 ] || [ $EXIT_CODE -eq 0 ]; then
+        echo "⚠️  日志查看被用户中断 (Ctrl+C)"
+        echo "💡 服务仍在后台运行"
+        echo ""
+        echo "常用命令:"
+        echo "  - 查看日志: tail -f $LOG_FILE"
+        echo "  - 停止服务: openclaw gateway stop"
+        echo "  - 查看状态: openclaw gateway status"
+    else
+        echo "日志查看已退出 (代码: $EXIT_CODE)"
+    fi
 else
-    echo "❌ OpenClaw 异常退出 (代码: $EXIT_CODE)"
+    echo "❌ OpenClaw 网关启动失败"
     echo ""
     echo "故障诊断信息:"
-    echo "1. 查看完整日志: cat $GATEWAY_LOG"
-    echo "2. 常见错误代码:"
-    echo "   - 1: 一般错误"
-    echo "   - 2: 配置错误"
-    echo "   - 3: 端口占用"
-    echo "   - 4: 依赖缺失"
-    echo ""
-    echo "3. 检查步骤:"
-    echo "   a. 检查端口: lsof -i :3000 2>/dev/null || echo '端口3000可用'"
-    echo "   b. 检查依赖: openclaw --version"
-    echo "   c. 检查配置: ls -la ~/.openclaw/config.yaml 2>/dev/null"
-    
-    # 显示错误摘要
-    if [ -f "$GATEWAY_LOG" ]; then
-        echo ""
-        echo "4. 错误摘要:"
-        tail -30 "$GATEWAY_LOG" | grep -i -E "(error|fail|exception|panic|uncaught|syntax)"
-    fi
+    echo "1. 检查端口占用: lsof -i :3000 2>/dev/null || echo '端口3000可用'"
+    echo "2. 检查依赖: openclaw --version"
+    echo "3. 检查配置: ls -la ~/.openclaw/"
+    echo "4. 查看日志: openclaw logs"
+    exit 1
 fi
 
 echo "========================================="
