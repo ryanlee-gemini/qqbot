@@ -973,6 +973,48 @@ ${ttsHint}${sttHint}`;
                     }
                     mediaPath = normalizePath(mediaPath);
                     
+                    // 处理可能被模型转义的路径
+                    // 1. 双反斜杠 -> 单反斜杠（Markdown 转义）
+                    mediaPath = mediaPath.replace(/\\\\/g, "\\");
+                    
+                    // 2. 八进制转义序列 + UTF-8 双重编码修复
+                    try {
+                      const hasOctal = /\\[0-7]{1,3}/.test(mediaPath);
+                      const hasNonASCII = /[\u0080-\u00FF]/.test(mediaPath);
+                      
+                      if (hasOctal || hasNonASCII) {
+                        log?.debug?.(`[qqbot:${account.accountId}] Decoding path with mixed encoding: ${mediaPath}`);
+                        
+                        // Step 1: 将八进制转义转换为字节
+                        let decoded = mediaPath.replace(/\\([0-7]{1,3})/g, (_: string, octal: string) => {
+                          return String.fromCharCode(parseInt(octal, 8));
+                        });
+                        
+                        // Step 2: 提取所有字节（包括 Latin-1 字符）
+                        const bytes: number[] = [];
+                        for (let i = 0; i < decoded.length; i++) {
+                          const code = decoded.charCodeAt(i);
+                          if (code <= 0xFF) {
+                            bytes.push(code);
+                          } else {
+                            const charBytes = Buffer.from(decoded[i], 'utf8');
+                            bytes.push(...charBytes);
+                          }
+                        }
+                        
+                        // Step 3: 尝试按 UTF-8 解码
+                        const buffer = Buffer.from(bytes);
+                        const utf8Decoded = buffer.toString('utf8');
+                        
+                        if (!utf8Decoded.includes('\uFFFD') || utf8Decoded.length < decoded.length) {
+                          mediaPath = utf8Decoded;
+                          log?.debug?.(`[qqbot:${account.accountId}] Successfully decoded path: ${mediaPath}`);
+                        }
+                      }
+                    } catch (decodeErr) {
+                      log?.error(`[qqbot:${account.accountId}] Path decode error: ${decodeErr}`);
+                    }
+                    
                     if (mediaPath) {
                       if (tagName === "qqvoice") {
                         sendQueue.push({ type: "voice", content: mediaPath });
